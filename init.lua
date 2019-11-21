@@ -6,6 +6,11 @@ harberger_economy = {}
 -- user (and not the default value). Thus default values must be duplicated
 -- here. Take care to keep them in sync.
 
+-- THINGS I've learned
+-- get_meta will emerge a chunk if it's not emerged yet
+-- player metadata is only accessible when the player is logged in
+-- detached inventories don't last across restarts
+
 local function settings_get_number(s, default)
   -- unfortunately settings:get always gets a string (or nil) so we have to convert to number
   local t = minetest.settings:get(s)
@@ -15,6 +20,8 @@ local function settings_get_number(s, default)
     return default
   end
 end
+
+local persistent_inventory_get_items
 
 harberger_economy.config = {
   starting_income = settings_get_number('harberger_economy.starting_income', 10000),
@@ -64,7 +71,7 @@ local default_data = {
   reserve_offers = {
     -- key is username to a table with
     -- key as item name to a table
-    -- {amount = 103, ordering = {nil or list of locations for the prefered ordering to take items }}
+    -- {price = 103, ordering = {nil or list of locations for the prefered ordering to take items }}
   },
   balances = {
     [harberger_economy.the_bank] = 0, -- special
@@ -74,12 +81,16 @@ local default_data = {
   initialized_players = {
     -- contains key-value pair of player and bool, is nil if not initialized and true if initialized
   },
+  inventory_change_list = {
+  },
+  detached_inventories = {
+  },
   time_since_last_payment = 0,
   daily_income = harberger_economy.config.starting_income,
 
 }
 
-local current_schema = '8'
+local current_schema = '10'
 local cached_storage = nil
 local batch_storage = 0
 function harberger_economy.get_storage()
@@ -144,6 +155,7 @@ function harberger_economy.initialize_player(player)
         storage.initialized_players[player_name] = true
         storage.balances[player_name] = 0
         storage.transactions[player_name] = {}
+        storage.inventory_change_list[player_name] = {}
       end
   end)
 end
@@ -244,11 +256,228 @@ function harberger_economy.get_balance(player_name)
   )
 end
 
+function harberger_economy.get_offers(buying_player_name)
+  return harberger_economy.with_storage(
+    function(storage)
+      local offers = {}
+      for player_name, b in pairs(storage.initialized_players) do
+        if b and player_name ~= buying_player_name then
+          local inv_list = persistent_inventory_get_items(player_name)
+          for list_name, list in pairs(inv_list) do
+            for index, item in ipairs(list) do
+              if not item:is_empty() then
+                local item_name = item:get_name()
+                if not offers[item_name] then
+                  offers[item_name] = {}
+                end
+                local offer = {}
+                offer.location = {type='player', name=player_name}
+                offer.price = harberger_economy.get_reserve_offer(player_name, item_name).price
+                offer.count = item:get_count()
+                table.insert(offers[item_name], offer)
+              end
+            end
+          end
+        end
+      end
+      return offers
+    end
+  )
+end
+
+function harberger_economy.get_cheapest_offers(buying_player_name)
+  local offers = harberger_economy.get_offers(buying_player_name)
+  print("offers" .. dump(offers))
+  local cheapest_offers = {}
+  for item_name, offer_list in pairs(offers) do
+    for i, offer in ipairs(offer_list) do
+      if not cheapest_offers[item_name] then
+        cheapest_offers[item_name] = offer.price
+      else
+        cheapest_offers[item_name] = math.min(cheapest_offers[item_name], offer.price)
+      end
+    end
+  end
+  print('Cheapest' .. dump(cheapest_offers))
+  return cheapest_offers
+end
+
 -- END public storage api
+
+-- BEGIN Persistent Inventory api
+
+-- TODO can probably split this out into a separate mod
+
+--[[
+When players leave the server the inventory is no longer accessible.
+This is a simple api for harberger_economy that lets you "edit" a virtual
+copy of the players inventory, which is kept in sync with the real inventory.
+
+We have a one way dataflow of
+
+write -> inventory_change_list -> inventory -> (write -> inventory_copy) --> read
+
+Everytime we want to change the inventory we edit the inventory_change_list and
+the inventory_copy directly. A timer moves changes from the inventory_change
+list to the inventory and then to the inventory_copy. When we need to read from
+the inventory we read from the inventory copy
+--]]
+
+local function get_inventory_copy_name(player_name)
+  return 'harberger_economy:persistent_player:' .. player_name
+end
+
+local function create_ro_detached_inventory(inventory_name)
+  minetest.create_detached_inventory(
+    inventory_name,
+    {
+      allow_move = function (inv, from_list, from_index, to_list, to_index, count, plyer)
+        return 0
+      end,
+      allow_put = function (inv, listname, index, stack, plyer)
+        return 0
+      end,
+      allow_take = function (inv, listname, index, stack, plyer)
+        return 0
+      end,
+      on_move = function (inv, from_list, from_index, to_list, to_index, count, plyer)
+        -- print('moved')
+      end,
+      on_put = function (inv, listname, index, stack, plyer)
+        -- print('put')
+      end,
+      on_take = function (inv, listname, index, stack, plyer)
+        -- print('take')
+      end,
+    }
+  )
+  return minetest.get_inventory({type="detached", name=inventory_name})
+end
+
+local function update_persistent_inventory(player)
+  harberger_economy.with_storage(
+    function (storage)
+      local player_name = player:get_player_name()
+      -- BEGIN Apply changelist
+      local list = storage.inventory_change_list[player_name]
+      for i, a in ipairs(list) do
+        -- TODO
+      end
+      storage.inventory_change_list[player_name] = {}
+      -- END Apply changelist
+      -- BEGIN Copy inventory
+      local inventory_name = get_inventory_copy_name(player_name)
+      local copy_inv = create_ro_detached_inventory(inventory_name)
+      local player_inv = minetest.get_inventory({type="player", name=player_name})
+      local serialized = {}
+      for list_name, list_value in pairs(player_inv:get_lists()) do
+        local width = player_inv:get_width(list_name)
+        local size = player_inv:get_size(list_name)
+        copy_inv:set_size(list_name, size)
+        copy_inv:set_width(list_name, width)
+        copy_inv:set_list(list_name, list_value)
+        serialized[list_name] = {width=width, size=size}
+        serialized[list_name].value = {}
+        for i, item in ipairs(list_value) do
+          serialized[list_name].value[i] = item:to_string()
+        end
+      end
+      storage.detached_inventories[inventory_name] = serialized
+      -- END Copy Inventory
+    end
+  )
+end
+
+local function restore_detached_inventory(inventory_name)
+  harberger_economy.with_storage(
+    function (storage)
+      local inv = storage.detached_inventories[inventory_name]
+      local copy_inv = create_ro_detached_inventory(inventory_name)
+      for list_name, list_config in pairs(inv) do
+        copy_inv:set_size(list_name, list_config.size)
+        copy_inv:set_width(list_name, list_config.width)
+        copy_inv:set_list(list_name, list_config.value)
+      end
+    end
+  )
+end
+
+local function get_persistent_detached_inventory(inventory_name)
+  local copy_inv = minetest.get_inventory({type="detached", name=inventory_name})
+  if not copy_inv then
+    restore_detached_inventory(inventory_name)
+    copy_inv = minetest.get_inventory({type="detached", name=inventory_name})
+  end
+  return copy_inv
+end
+
+function persistent_inventory_get_items(player_name)
+  local inventory_name = get_inventory_copy_name(player_name)
+  local copy_inv = get_persistent_detached_inventory(inventory_name)
+  local lists = copy_inv:get_lists()
+  lists['craftpreview'] = nil -- We don't care about craft preview
+  return lists
+end
+
+
+-- END Persistent Inventory api
+
+-- BEGIN other api
+function harberger_economy.show_buy_form(player_name)
+  local form_name = 'harberger_economy:buy_form:' .. player_name
+  local offers = harberger_economy.get_cheapest_offers(player_name)
+  local num_offers = 0  -- # only works for lists not tables
+  for item, price in pairs(offers) do
+    num_offers = num_offers + 1
+  end
+  local columns = 8
+  local rows = math.ceil(num_offers/columns)
+
+  local form_spec = {'size[', columns, ',', rows, ']'}
+  local i = 0
+  for item, price in pairs(offers) do
+    table.insert(form_spec, 'item_image_button[')
+    table.insert(form_spec, i % columns)
+    table.insert(form_spec, ',')
+    table.insert(form_spec, math.floor(i / columns))
+    table.insert(form_spec, ';1.2,1.2;')
+    table.insert(form_spec, item)
+    table.insert(form_spec, ';')
+    table.insert(form_spec, item)
+    table.insert(form_spec, ';')
+    -- if price >= 10000 then
+    --   price = math.floor(price / 1000)
+    --   price = price .. 'k'
+    -- end
+
+    table.insert(form_spec, price)
+    table.insert(form_spec, ']')
+    i = i + 1
+  end
+  form_spec = table.concat(form_spec)
+  minetest.show_formspec(player_name, form_name, form_spec)
+end
+-- END other api
+
 
 -- BEGIN Useful functions
 
-local function update_inventory(player, inventory)
+local function initialize_reserve_price(player_name, item_name)
+  local price = harberger_economy.get_default_price(item_name)
+  minetest.chat_send_player(
+    player_name,
+    "You have not set a reserve price for "
+      .. item_name .. " setting it to " .. price)
+  harberger_economy.log(
+    'action',
+    player_name .. " has not set a reserve price for "
+      .. item_name .. " setting it to " .. price)
+  harberger_economy.set_reserve_price(player_name, item_name, price)
+  return price
+end
+
+-- TODO should probably replace this function to rather do it when ever get all offer is called
+local function update_reserve_prices(player, inventory)
   local player_name = player:get_player_name()
   for list_name, list in pairs(inventory:get_lists()) do
     if list_name ~= 'craftpreview' then -- ignore craftpreview since it's a 'virtual' item
@@ -256,16 +485,7 @@ local function update_inventory(player, inventory)
         local item_name = item_stack:get_name()
         local reserve_offer = harberger_economy.get_reserve_offer(player_name, item_name)
         if not reserve_offer then
-          local price = harberger_economy.get_default_price(item_name)
-          minetest.chat_send_player(
-            player_name,
-            "You have not set a reserve price for "
-              .. item_name .. " setting it to " .. price)
-          harberger_economy.log(
-            'action',
-            player_name .. " has not set a reserve price for "
-              .. item_name .. " setting it to " .. price)
-          harberger_economy.set_reserve_price(player_name, item_name, price)
+          initialize_reserve_price(player_name, item_name)
         end
         -- print(list_name .. '[' .. index  .. ']' .. " = " .. item_stack:to_string())
       end
@@ -306,8 +526,9 @@ local function update_player(player)
   -- can replace with
   -- minetest.register_on_player_inventory_action(
   -- function(player, action, inventory, inventory_info))
+  update_persistent_inventory(player)
   update_player_hud(player)
-  update_inventory(player, player:get_inventory())
+  update_reserve_prices(player, player:get_inventory())
 end
 
 local function do_payments()
@@ -396,6 +617,17 @@ minetest.register_chatcommand(
           return true, "Your balance is " .. storage.balances[player_name] .. "."
         end
       )
+    end,
+  }
+)
+minetest.register_chatcommand(
+  'harberger_economy:buy',
+  {
+    params = '',
+    description = 'Buy items',
+    privs = {},
+    func = function (player_name, params)
+      harberger_economy.show_buy_form(player_name)
     end,
   }
 )
