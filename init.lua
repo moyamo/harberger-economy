@@ -106,10 +106,10 @@ end
 function harberger_economy.with_storage(func)
   local storage = harberger_economy.get_storage()
   batch_storage = batch_storage + 1
-  local return_value = func(storage)
+  local return_value = {func(storage)}
   batch_storage = batch_storage - 1
   harberger_economy.set_storage(storage)
-  return return_value
+  return unpack(return_value)
 end
 
 function harberger_economy.batch_storage(func)
@@ -228,6 +228,39 @@ function harberger_economy.pay(from, to, amount, reason, can_be_negative)
 end
 
 -- END public storage api
+
+
+minetest.register_privilege(
+  'harberger_economy:bank_clerk',
+  {
+    description = "Permission to read all account balances, transaction and econometrics",
+    give_to_singleplayer = false, -- this mod is pretty useless in singleplayer
+    give_to_admin = true,
+    on_grant = nil,
+    on_revoke = nil,
+  }
+)
+
+minetest.register_chatcommand(
+  'harberger_economy:list_balances',
+  {
+    params = '',
+    description = 'Lists all account balances',
+    privs = {['harberger_economy:bank_clerk'] = true},
+    func = function (name, param)
+      return harberger_economy.with_storage(
+        function (storage)
+          local output = {}
+          for user, balance in pairs(storage.balances) do
+            table.insert(output, user .. ":  " .. balance)
+          end
+          return true, table.concat(output, "\n")
+        end
+      )
+    end,
+  }
+)
+
 
 
 -- minetest.register_on_joinplayer(
