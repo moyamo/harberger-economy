@@ -29,6 +29,18 @@ function harberger_economy.log(logtype, logmessage)
   minetest.log(logtype, 'harberger_economy: ' .. logmessage)
 end
 
+-- Rounds number stochastic ally
+function harberger_economy.round(n)
+  local p = math.random()
+  local w = math.floor(n)
+  local f = n - w
+  if p < f then
+    return w + 1
+  else
+    return w
+  end
+end
+
 -- BEGIN Private storage api
 
 harberger_economy.storage = minetest.get_mod_storage()
@@ -131,7 +143,7 @@ end
 
 function harberger_economy.set_reserve_price(player_name, item_name, price)
   return harberger_economy.with_storage(function (storage)
-      price = math.floor(price)
+      price = harberger_economy.round(price)
       local old_reserve = storage.reserve_offers[player_name][item_name]
       if not old_reserve then
         storage.reserve_offers[player_name][item_name] = {price = price , ordering = nil}
@@ -145,7 +157,7 @@ function harberger_economy.get_default_price(item_name)
   local price_index = harberger_economy.config.price_index
   local time = minetest.get_gametime()
   local time_speed = minetest.settings:get('time_speed') or TIME_SPEED
-  return math.floor(price_index * time * time_speed / 24 / 60 / 60)
+  return harberger_economy.round(price_index * time * time_speed / 24 / 60 / 60)
 end
 
 
