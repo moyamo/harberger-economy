@@ -77,3 +77,8 @@ harberger_economy.update_delay (Update delay) float 1 0 84600
 # The amount of money that the users are expected to spend per day on average
 # This number is used for inflation targeting.
 harberger_economy.price_index (Price index) int 10000 1 1000000000000
+
+# The number of times a day that the mod charges harberger tax and pays out.
+# This can be a fraction (e.g. 0.5 is every second day). A day is 20 minutes by
+# default and can be changed by setting time_speed
+harberger_economy.payment_frequency (Payment frequency) float 1 0 1000000

@@ -18,3 +18,5 @@ auction (decrease your selling price of everything by 1% every minute (or maybe
 Unfreeze account and restore prices as soon as person reaches a positive balance
 
 # Warn person before they go bankrupt, maybe like a minute before the auction
+
+# Don't delete old schema upgrade instead

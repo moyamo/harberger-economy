@@ -6,7 +6,7 @@ harberger_economy = {}
 -- user (and not the default value). Thus default values must be duplicated
 -- here. Take care to keep them in sync.
 
-local function settings_get_int(s, default)
+local function settings_get_number(s, default)
   -- unfortunately settings:get always gets a string (or nil) so we have to convert to number
   local t = minetest.settings:get(s)
   if t then
@@ -17,13 +17,17 @@ local function settings_get_int(s, default)
 end
 
 harberger_economy.config = {
-  starting_income = settings_get_int('harberger_economy.starting_income', 10000),
-  update_delay = settings_get_int('harberger_economy.update_delay', 1),
-  price_index = settings_get_int('harberger_economy.price_index', 10000),
+  starting_income = settings_get_number('harberger_economy.starting_income', 10000),
+  update_delay = settings_get_number('harberger_economy.update_delay', 1),
+  price_index = settings_get_number('harberger_economy.price_index', 10000),
+  payment_frequency = settings_get_number('harberger_economy.payment_frequency', 1),
 }
 
-local TIME_SPEED = 72 -- This is a default constant in minetest, but I can't
-                      -- seem to find it anywhere, so I'm going to hard code it.
+-- This is a default constant in minetest, but I can't seem to find it anywhere,
+-- so I'm going to hard code 72.
+local TIME_SPEED = minetest.settings:get('time_speed') or 72
+
+local DAY_SECONDS = 24 * 60 * 60
 
 function harberger_economy.log(logtype, logmessage)
   minetest.log(logtype, 'harberger_economy: ' .. logmessage)
@@ -41,6 +45,9 @@ function harberger_economy.round(n)
   end
 end
 
+-- "name" of the bank
+harberger_economy.the_bank = "%THEBANK%"
+
 -- BEGIN Private storage api
 
 harberger_economy.storage = minetest.get_mod_storage()
@@ -54,14 +61,17 @@ local default_data = {
     -- {amount = 103, ordering = {nil or list of locations for the prefered ordering to take items }}
   },
   balances = {
+    [harberger_economy.the_bank] = 0, -- special
   },
   transactions = {
   },
   initialized_players = {
     -- contains key-value pair of player and bool, is nil if not initialized and true if initialized
-  }
+  },
+  time_since_last_payment = 0,
+  daily_income = harberger_economy.config.starting_income,
 }
-local current_schema = '4'
+local current_schema = '7'
 local cached_storage = nil
 local batch_storage = 0
 function harberger_economy.get_storage()
@@ -70,7 +80,7 @@ function harberger_economy.get_storage()
     if not data_string then
       cached_storage = default_data
     else
-      data_with_schema = minetest.deserialize(data_string)
+      local data_with_schema = minetest.deserialize(data_string)
       if data_with_schema.schema ~= current_schema then
         cached_storage = default_data
       else
@@ -156,10 +166,66 @@ end
 function harberger_economy.get_default_price(item_name)
   local price_index = harberger_economy.config.price_index
   local time = minetest.get_gametime()
-  local time_speed = minetest.settings:get('time_speed') or TIME_SPEED
-  return harberger_economy.round(price_index * time * time_speed / 24 / 60 / 60)
+  local time_speed =  TIME_SPEED
+  return harberger_economy.round(price_index * time * time_speed / DAY_SECONDS)
 end
 
+function harberger_economy.reason_to_string(reason)
+  if reason.type == 'daily_income' then
+    return 'Daily income'
+  else
+    harberger_economy.log('error', 'Reason for payment' .. reason .. ' is unknown.')
+  end
+end
+
+function harberger_economy.pay(from, to, amount, reason, can_be_negative)
+  return harberger_economy.with_storage(function (storage)
+      from = from or harberger_economy.the_bank
+      to = to or harberger_economy.the_bank
+      amount = harberger_economy.round(amount)
+      local time = minetest.get_gametime()
+      local reason_string = harberger_economy.reason_to_string(reason)
+      local transfer_string = 'Transferring (' .. reason_string .. ') '
+        .. amount
+        .. ' from ' .. from
+        .. ' to ' .. to
+      local from_new_balance
+      local to_new_balance
+      if from ~= to then
+        from_new_balance = storage.balances[from] - amount
+        to_new_balance = storage.balances[to] + amount
+      else
+        from_new_balance = storage.balances[from]
+        to_new_balance = storage.balances[to]
+        can_be_negative = true -- we are not changing balance, so this check is useless
+      end
+      if not can_be_negative then
+        if (from ~= harberger_economy.the_bank and from_new_balance < 0 and amount > 0)
+          or (to ~= harberger_economy.the_bank and to_new_balance < 0 and amount < 0)
+        then
+          harberger_economy.log(
+            'warn',
+            transfer_string
+              .. ' would result in a negative balance. Ignoring.'
+          )
+          return false
+        end
+      end
+      harberger_economy.log('action', transfer_string  .. '.')
+      if from ~= harberger_economy.the_bank then
+        minetest.chat_send_player(from, transfer_string .. '.')
+      end
+      if to ~= harberger_economy.the_bank and from ~= to then
+        minetest.chat_send_player(to, transfer_string .. '.')
+      end
+      storage.balances[from] = from_new_balance
+      storage.balances[to] = to_new_balance
+      table.insert(storage.transactions,
+                   {time=time, from=from, to=to, amount=amount, reason=reason}
+      )
+      return true
+  end)
+end
 
 -- END public storage api
 
@@ -227,23 +293,50 @@ local function update_player(player)
   if not harberger_economy.is_player_initialized(player_name) then
     harberger_economy.initialize_player(player_name)
   end
-  -- can replace with minetest.register_on_player_inventory_action(function(player, action, inventory, inventory_info))`
+  -- can replace with
+  -- minetest.register_on_player_inventory_action(
+  -- function(player, action, inventory, inventory_info))
   update_inventory(player, player:get_inventory())
 end
 
-
-
-local function update_function(dtime)
-  harberger_economy.batch_storage(
-    function ()
-      local connected_players = minetest.get_connected_players()
-      for i, player in ipairs(connected_players) do
-        update_player(player)
+local function do_payments()
+  return harberger_economy.with_storage(
+    function(storage)
+      local payout = harberger_economy.round(
+        storage.daily_income
+          * storage.time_since_last_payment
+          / DAY_SECONDS * TIME_SPEED
+      )
+      for player, b in pairs(storage.initialized_players) do
+        if b then
+          harberger_economy.pay(nil, player, payout, {type='daily_income'}, true)
+        end
       end
     end
   )
 end
 
+
+local payment_period = DAY_SECONDS / TIME_SPEED
+  / harberger_economy.config.payment_frequency
+
+local function update_function(dtime)
+  return harberger_economy.with_storage(
+    function (storage)
+      -- Update player inventories
+      local connected_players = minetest.get_connected_players()
+      for i, player in ipairs(connected_players) do
+        update_player(player)
+      end
+      -- Check if we should do payment
+      storage.time_since_last_payment = storage.time_since_last_payment + dtime
+      if storage.time_since_last_payment >= payment_period then
+        do_payments()
+        storage.time_since_last_payment = 0
+      end
+    end
+  )
+end
 
 local update_timediff = harberger_economy.config.update_delay
 minetest.register_globalstep(
@@ -254,4 +347,5 @@ minetest.register_globalstep(
       update_timediff = 0
     end
   end
+
 )
