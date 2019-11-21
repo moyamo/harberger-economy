@@ -247,7 +247,7 @@ minetest.register_chatcommand(
     params = '',
     description = 'Lists all account balances',
     privs = {['harberger_economy:bank_clerk'] = true},
-    func = function (name, param)
+    func = function (player_name, params)
       return harberger_economy.with_storage(
         function (storage)
           local output = {}
@@ -255,6 +255,22 @@ minetest.register_chatcommand(
             table.insert(output, user .. ":  " .. balance)
           end
           return true, table.concat(output, "\n")
+        end
+      )
+    end,
+  }
+)
+
+minetest.register_chatcommand(
+  'harberger_economy:my_balance',
+  {
+    params = '',
+    description = 'Show me my balance',
+    privs = {},
+    func = function (player_name, params)
+      return harberger_economy.with_storage(
+        function (storage)
+          return true, "Your balance is " .. storage.balances[player_name] .. "."
         end
       )
     end,
