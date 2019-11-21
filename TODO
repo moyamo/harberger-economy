@@ -2,3 +2,19 @@
 
 A screenshot shown in the mod manager within the main menu. It should
 have an aspect ratio of 3:2 and a minimum size of 300×200 pixels.
+
+# Go Through https://rubenwardy.com/minetest_modding_book/en/quality/releasing.html
+
+
+# Before releasing check invariants.txt
+
+# Dutch auction things off when negative balance
+
+When negative balance give warning period to go in good standing, and don't let
+further buys happen. When warning period over, freeze account and have a dutch
+auction (decrease your selling price of everything by 1% every minute (or maybe
+30 seconds)). Also announce the auction so that other players know about it.
+
+Unfreeze account and restore prices as soon as person reaches a positive balance
+
+# Warn person before they go bankrupt, maybe like a minute before the auction

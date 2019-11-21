@@ -68,5 +68,12 @@
 #
 # Note: The Basic Income will automatically adjust to prevent
 # deflation/inflation.
+harberger_economy.starting_income (Starting income) int 10000 0 1000000000000
 
-starting_income (Starting income) int 10000 0 1000000000
+# Length of the delaybefore mod runs it's update code in seconds. Set to 0 to
+# run this function every tick
+harberger_economy.update_delay (Update delay) float 1 0 84600
+
+# The amount of money that the users are expected to spend per day on average
+# This number is used for inflation targeting.
+harberger_economy.price_index (Price index) int 10000 1 1000000000000

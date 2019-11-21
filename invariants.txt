@@ -1,0 +1,6 @@
+This is a list of things that manually needs to be check to ensure correctness.
+I should write probably write a script to ensure this is correct.
+
+- mod.conf and depends.txt must correspond
+
+- settingtypes.txt and harberger_economy.config (in init.lua) a must correspond
