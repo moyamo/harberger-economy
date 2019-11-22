@@ -83,15 +83,22 @@ local default_data = {
     -- contains key-value pair of player and bool, is nil if not initialized and true if initialized
   },
   inventory_change_list = {
+    -- See persistent inventory
   },
   detached_inventories = {
+    -- See persistent inventory
   },
   time_since_last_payment = 0,
   daily_income = harberger_economy.config.starting_income,
-
+  quantity_days = {
+    -- Quantity of an item on the market integrated over the number of days in the market
+  },
+  total_buys = {
+    -- Number of times an item has been bought
+  },
 }
 
-local current_schema = '10'
+local current_schema = '12'
 local cached_storage = nil
 local batch_storage = 0
 function harberger_economy.get_storage()
@@ -343,6 +350,18 @@ function harberger_economy.get_cheapest_offers(buying_player_name)
   return cheapest_offers
 end
 
+local function on_successful_buy(item_name)
+  return harberger_economy.with_storage(
+    function (storage)
+      local total_buys = storage.total_buys[item_name]
+      if not total_buys then
+        total_buys = 0
+      end
+      storage.total_buys[item_name] = total_buys + 1
+    end
+  )
+end
+
 function harberger_economy.buy(player_name, item_name)
   return harberger_economy.with_storage(
     function (storage)
@@ -374,6 +393,7 @@ function harberger_economy.buy(player_name, item_name)
               return false
             else
               persistent_inventory_try_to_add_one(player_name, item_name)
+              on_successful_buy(item_name)
               return true
             end
           end
@@ -386,7 +406,27 @@ end
 
 -- Returns the tax rate in basis points (1/10000ths or 1/100 of a percent)
 function harberger_economy.get_tax_rate_bp(item_name)
-  return harberger_economy.config.default_tax_rate_bp
+  return harberger_economy.with_storage(
+    function (storage)
+      local quantity_days = storage.quantity_days[item_name]
+      local buys = storage.total_buys[item_name]
+      if not quantity_days or not buys or buys == 0 or quantity_days == 0 then
+        return harberger_economy.config.default_tax_rate_bp
+      end
+      local computed_tax_rate = harberger_economy.round(buys / quantity_days * 10000)
+      -- When we have very little information the tax rate can be horrendously
+      -- wrong. Information can be measured by how large the quantities are. So
+      -- we use them as caps.
+      local scale = harberger_economy.config.default_tax_rate_bp
+      local capped_rate = math.min(
+        computed_tax_rate,
+        quantity_days * scale
+      )
+      -- We don't want the rate to be too small either
+      local final_rate = math.max(capped_rate, scale)
+      return final_rate
+    end
+  )
 end
 
 function harberger_economy.get_tax_per_item(player_name)
@@ -828,6 +868,7 @@ local function update_player(player)
   update_reserve_prices(player, player:get_inventory())
 end
 
+-- TODO can remove with_storage from here by creating harberger_.. methods
 local function do_payments()
   return harberger_economy.with_storage(
     function(storage)
@@ -845,6 +886,7 @@ local function do_payments()
   )
 end
 
+-- TODO can remove with_storage from here by creating harberger_.. methods
 local function do_charges()
   return harberger_economy.with_storage(
     function(storage)
@@ -858,6 +900,25 @@ local function do_charges()
       )
 
           harberger_economy.pay(player, nil, payout, {type='harberger_tax'}, true)
+        end
+      end
+    end
+  )
+end
+
+local function do_quantity_integration()
+  return harberger_economy.with_storage(
+    function(storage)
+      local offers = harberger_economy.get_offers()
+      local dt = storage.time_since_last_payment / DAY_SECONDS * TIME_SPEED
+      for item_name, offer_list in pairs(offers) do
+        if not storage.quantity_days[item_name] then
+          storage.quantity_days[item_name] = 0
+        end
+        for i, offer in ipairs(offer_list) do
+          storage.quantity_days[item_name] =
+            storage.quantity_days[item_name]
+            + offer.count * dt
         end
       end
     end
@@ -879,6 +940,7 @@ local function update_function(dtime)
       -- Check if we should do payment
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
       if storage.time_since_last_payment >= payment_period then
+        do_quantity_integration()
         do_payments()
         do_charges()
         storage.time_since_last_payment = 0
