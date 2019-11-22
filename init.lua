@@ -191,6 +191,12 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
         harberger_economy.log('warning', "Tried to set price of non-existent item " .. item_name .. ". Ignoring.")
         return
       end
+      if price < 0 then
+        -- While in theory negative valuations should be possible (I would pay
+        -- for you to take this off my hands), but it becomes messy when the person
+        -- can't actually afford to pay. So we disallow it.
+        harberger_economy.log('warning', "Tried to set price of item " .. item_name .. " to a negative number. Ignoring.")
+      end
       price = harberger_economy.round(price)
       local old_reserve = storage.reserve_offers[player_name][item_name]
       if not old_reserve then
@@ -214,13 +220,17 @@ function harberger_economy.get_default_price(item_name)
 end
 
 function harberger_economy.reason_to_string(reason)
-  if reason.type == 'daily_income' then
-    return 'Daily income'
-  elseif reason.type == 'buy' then
-    return 'Bought ' .. reason.item_stack
-  else
-    harberger_economy.log('error', 'Reason for payment' .. reason .. ' is unknown.')
+  if reason then
+      if reason.type == 'daily_income' then
+        return 'Daily income'
+      elseif reason.type == 'buy' then
+        return 'Bought ' .. reason.item_stack
+      elseif reason.type == 'harberger_tax' then
+        return 'Harberger tax'
+      end
   end
+  harberger_economy.log('error', 'Reason for payment' .. tostring(reason) .. ' is unknown.')
+  return tostring(reason)
 end
 
 function harberger_economy.pay(from, to, amount, reason, can_be_negative)
@@ -288,22 +298,24 @@ function harberger_economy.get_offers(buying_player_name)
         if b and player_name ~= buying_player_name then
           local inv_list = persistent_inventory_get_items(player_name)
           for list_name, list in pairs(inv_list) do
-            for index, item in ipairs(list) do
-              if not item:is_empty() then
-                local item_name = item:get_name()
-                if not offers[item_name] then
-                  offers[item_name] = {}
-                end
-                local offer = {}
-                offer.location = {type='player', name=player_name}
-                local try_offer_price = harberger_economy.get_reserve_offer(player_name, item_name)
-                if try_offer_price then
-                  offer.price = try_offer_price.price
-                  offer.count = item:get_count()
-                  table.insert(offers[item_name], offer)
-                else
-                  -- TODO we have to do nothing here because calling initialize
-                  -- _reserve_price causes a recursive infinite loop
+            if list_name ~= 'craftpreview' then
+              for index, item in ipairs(list) do
+                if not item:is_empty() then
+                  local item_name = item:get_name()
+                  if not offers[item_name] then
+                    offers[item_name] = {}
+                  end
+                  local offer = {}
+                  offer.location = {type='player', name=player_name}
+                  local try_offer_price = harberger_economy.get_reserve_offer(player_name, item_name)
+                  if try_offer_price then
+                    offer.price = try_offer_price.price
+                    offer.count = item:get_count()
+                    table.insert(offers[item_name], offer)
+                  else
+                    -- TODO we have to do nothing here because calling initialize
+                    -- _reserve_price causes a recursive infinite loop
+                  end
                 end
               end
             end
@@ -372,6 +384,25 @@ function harberger_economy.buy(player_name, item_name)
   )
 end
 
+-- Returns the tax rate in basis points (1/10000ths or 1/100 of a percent)
+function harberger_economy.get_tax_rate_bp(item_name)
+  return 10
+end
+
+function harberger_economy.get_tax_owed(player_name)
+  local offers = harberger_economy.get_offers(nil)
+  local tax = 0
+  for item_name, offer_list in pairs(offers) do
+    for i, offer in ipairs(offer_list) do
+      if offer.location.type ~= 'player' then
+        harberger_economy.log("error", 'Non player inventories not supported and will not correctly be taxed')
+      elseif offer.location.name == player_name then
+        tax = tax + offer.price * offer.count * harberger_economy.get_tax_rate_bp(item_name) / 10000
+      end
+    end
+  end
+  return harberger_economy.round(tax)
+end
 
 
 -- END public storage api
@@ -769,6 +800,25 @@ local function do_payments()
   )
 end
 
+local function do_charges()
+  return harberger_economy.with_storage(
+    function(storage)
+      for player, b in pairs(storage.initialized_players) do
+        if b then
+          local daily_tax_owed = harberger_economy.get_tax_owed(player)
+          local payout = harberger_economy.round(
+            daily_tax_owed
+              * storage.time_since_last_payment
+              / DAY_SECONDS * TIME_SPEED
+      )
+
+          harberger_economy.pay(nil, player, payout, {type='harberger_tax'}, true)
+        end
+      end
+    end
+  )
+end
+
 
 local payment_period = DAY_SECONDS / TIME_SPEED
   / harberger_economy.config.payment_frequency
@@ -785,6 +835,7 @@ local function update_function(dtime)
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
       if storage.time_since_last_payment >= payment_period then
         do_payments()
+        do_charges()
         storage.time_since_last_payment = 0
       end
     end
