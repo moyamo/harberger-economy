@@ -166,6 +166,12 @@ function harberger_economy.is_player_initialized(player_name)
   end)
 end
 
+function harberger_economy.get_reserve_offers(player_name, item_name)
+  return harberger_economy.with_storage(function (storage)
+      return storage.reserve_offers[player_name]
+  end)
+end
+
 function harberger_economy.get_reserve_offer(player_name, item_name)
   return harberger_economy.with_storage(function (storage)
       return storage.reserve_offers[player_name][item_name]
@@ -174,6 +180,10 @@ end
 
 function harberger_economy.set_reserve_price(player_name, item_name, price)
   return harberger_economy.with_storage(function (storage)
+      if not minetest.registered_items[item_name] then
+        harberger_economy.log('warning', "Tried to set price of non-existent item " .. item_name .. ". Ignoring.")
+        return
+      end
       price = harberger_economy.round(price)
       local old_reserve = storage.reserve_offers[player_name][item_name]
       if not old_reserve then
@@ -185,10 +195,15 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
 end
 
 function harberger_economy.get_default_price(item_name)
-  local price_index = harberger_economy.config.price_index
-  local time = minetest.get_gametime()
-  local time_speed =  TIME_SPEED
-  return harberger_economy.round(price_index * time * time_speed / DAY_SECONDS)
+  local cheapest_offers = harberger_economy.get_cheapest_offers()
+  if cheapest_offers[item_name] then
+    return cheapest_offers[item_name]
+  else
+      local price_index = harberger_economy.config.price_index
+      local time = minetest.get_gametime()
+      local time_speed =  TIME_SPEED
+      return harberger_economy.round(price_index * time * time_speed / DAY_SECONDS)
+  end
 end
 
 function harberger_economy.reason_to_string(reason)
@@ -225,7 +240,7 @@ function harberger_economy.pay(from, to, amount, reason, can_be_negative)
           or (to ~= harberger_economy.the_bank and to_new_balance < 0 and amount < 0)
         then
           harberger_economy.log(
-            'warn',
+            'warning',
             transfer_string
               .. ' would result in a negative balance. Ignoring.'
           )
@@ -272,9 +287,15 @@ function harberger_economy.get_offers(buying_player_name)
                 end
                 local offer = {}
                 offer.location = {type='player', name=player_name}
-                offer.price = harberger_economy.get_reserve_offer(player_name, item_name).price
-                offer.count = item:get_count()
-                table.insert(offers[item_name], offer)
+                local try_offer_price = harberger_economy.get_reserve_offer(player_name, item_name)
+                if try_offer_price then
+                  offer.price = try_offer_price.price
+                  offer.count = item:get_count()
+                  table.insert(offers[item_name], offer)
+                else
+                  -- TODO we have to do nothing here because calling initialize
+                  -- _reserve_price causes a recursive infinite loop
+                end
               end
             end
           end
@@ -424,7 +445,7 @@ end
 
 -- BEGIN other api
 function harberger_economy.show_buy_form(player_name)
-  local form_name = 'harberger_economy:buy_form:' .. player_name
+  local form_name = 'harberger_economy:buy_form'
   local offers = harberger_economy.get_cheapest_offers(player_name)
   local num_offers = 0  -- # only works for lists not tables
   for item, price in pairs(offers) do
@@ -457,12 +478,84 @@ function harberger_economy.show_buy_form(player_name)
   form_spec = table.concat(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
+
+function harberger_economy.show_price_form(player_name, item_name)
+  if not item_name then
+    item_name = ''
+  end
+  local form_name = 'harberger_economy:price_form'
+  local offers = harberger_economy.get_reserve_offers(player_name)
+  local price = (offers[item_name] or {}).price or ''
+  local offer_list = {}
+  for item, offer in pairs(offers) do
+    table.insert(offer_list, {item=item, label=offer.price})
+  end
+  table.sort(offer_list, function (a, b) return a.item < b.item end)
+  local columns = 8
+  local rows = math.ceil(#offer_list/columns)
+  local form_spec = {'size[', columns, ',', rows + 1, ']'}
+  table.insert(form_spec, 'field[0.3,0;3,2;item_name;Item name;')
+  table.insert(form_spec, item_name)
+  table.insert(form_spec, ']')
+  table.insert(form_spec, 'field[3.3,0;3,2;price;Price;')
+  table.insert(form_spec, price)
+  table.insert(form_spec, ']')
+  table.insert(form_spec, 'button[6,0;2,1.3;update;Update]')
+  table.insert(form_spec, 'container[0, 1]')
+  for i, offer in ipairs(offer_list) do
+    table.insert(form_spec, 'item_image_button[')
+    table.insert(form_spec, (i - 1) % columns)
+    table.insert(form_spec, ',')
+    table.insert(form_spec, math.floor((i - 1) / columns))
+    table.insert(form_spec, ';1.1,1.1;')
+    table.insert(form_spec, offer.item)
+    table.insert(form_spec, ';')
+    table.insert(form_spec, 'item_button:')
+    table.insert(form_spec, offer.item)
+    table.insert(form_spec, ';')
+    table.insert(form_spec, offer.label)
+    table.insert(form_spec, ']')
+  end
+  table.insert(form_spec, 'container_end[]')
+  form_spec = table.concat(form_spec)
+  print(form_spec)
+  minetest.show_formspec(player_name, form_name, form_spec)
+end
+
+-- Receive price form
+minetest.register_on_player_receive_fields(
+  function(player, form_name, fields)
+    if form_name ~= 'harberger_economy:price_form' then
+      return false
+    end
+    local player_name = player:get_player_name()
+    local item_name = fields.item_name
+    local price = tonumber(fields.price)
+    if fields.update or fields.key_enter_field and price then
+      harberger_economy.set_reserve_price(player_name, item_name, price)
+      if fields.update then
+        harberger_economy.show_price_form(player_name, item_name)
+      end
+      return true
+    end
+    local prefix = "item_button:"
+    for k, v in pairs(fields) do
+      if k:sub(1, #prefix) == prefix then
+        local new_item_name = k:sub(#prefix + 1, #k)
+        harberger_economy.show_price_form(player_name, new_item_name)
+        return true
+      end
+    end
+    return true
+  end
+)
+
 -- END other api
 
 
 -- BEGIN Useful functions
 
-local function initialize_reserve_price(player_name, item_name)
+function initialize_reserve_price(player_name, item_name)
   local price = harberger_economy.get_default_price(item_name)
   minetest.chat_send_player(
     player_name,
@@ -482,10 +575,12 @@ local function update_reserve_prices(player, inventory)
   for list_name, list in pairs(inventory:get_lists()) do
     if list_name ~= 'craftpreview' then -- ignore craftpreview since it's a 'virtual' item
       for index, item_stack in ipairs(list) do
-        local item_name = item_stack:get_name()
-        local reserve_offer = harberger_economy.get_reserve_offer(player_name, item_name)
-        if not reserve_offer then
-          initialize_reserve_price(player_name, item_name)
+        if not item_stack:is_empty() then
+          local item_name = item_stack:get_name()
+          local reserve_offer = harberger_economy.get_reserve_offer(player_name, item_name)
+          if not reserve_offer then
+            initialize_reserve_price(player_name, item_name)
+          end
         end
         -- print(list_name .. '[' .. index  .. ']' .. " = " .. item_stack:to_string())
       end
@@ -620,6 +715,7 @@ minetest.register_chatcommand(
     end,
   }
 )
+
 minetest.register_chatcommand(
   'harberger_economy:buy',
   {
@@ -629,6 +725,28 @@ minetest.register_chatcommand(
     func = function (player_name, params)
       harberger_economy.show_buy_form(player_name)
     end,
+  }
+)
+
+minetest.register_chatcommand(
+  'harberger_economy:price',
+  {
+    params = '[item] [price]',
+    description = 'Price items',
+    privs = {},
+    func = function (player_name, params)
+      params = string.split(params, ' ')
+      local item_name = params[1]
+      if not minetest.registered_items[item_name] then
+        item_name = nil
+      end
+      local price = tonumber(params[2])
+      if price and item_name then
+        harberger_economy.set_reserve_price(player_name, item_name, price)
+      else
+        harberger_economy.show_price_form(player_name, item_name)
+      end
+    end
   }
 )
 
