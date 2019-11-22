@@ -88,3 +88,10 @@ harberger_economy.payment_frequency (Payment frequency) float 1 0 1000000
 # tax rate will be computed.
 #
 harberger_economy.default_tax_rate_bp (Default tax rate [basis points]) float 10 0 1000000
+
+# The maximum amount that the money supply is allowed to increase in a day. (The
+# default is that the money supply is allowed to increase 10x in a day). This limit exists to
+# prevent hyper-inflation. If you are experiencing hyper-inflation try lowering
+# the limit. If you are experience deflation increase this limit.
+
+harberger_economy.money_supply_rate_limit (Money supply rate lime) float 10 0 1000000

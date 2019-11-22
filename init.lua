@@ -29,6 +29,7 @@ harberger_economy.config = {
   price_index = settings_get_number('harberger_economy.price_index', 10000),
   payment_frequency = settings_get_number('harberger_economy.payment_frequency', 1),
   default_tax_rate_bp = settings_get_number('harberger_economy.default_tax_rate_bp', 10),
+  money_supply_rate_limit = settings_get_number('harberger_economy.money_supply_rate_limit', 10),
 }
 
 -- This is a default constant in minetest, but I can't seem to find it anywhere,
@@ -164,7 +165,7 @@ function harberger_economy.initialize_player(player)
         storage.offers[player_name] = {}
         storage.reserve_offers[player_name] = {}
         storage.initialized_players[player_name] = true
-        storage.balances[player_name] = 0
+        storage.balances[player_name] = harberger_economy.config.starting_income
         storage.transactions[player_name] = {}
         storage.inventory_change_list[player_name] = {}
       end
@@ -176,6 +177,19 @@ function harberger_economy.is_player_initialized(player_name)
       return not not storage.initialized_players[player_name]
   end)
 end
+
+function harberger_economy.get_players()
+  return harberger_economy.with_storage(function (storage)
+      local players = {}
+      for player, b in pairs(storage.initialized_players) do
+        if b then
+          table.insert(players, player)
+        end
+      end
+      return players
+  end)
+end
+
 
 function harberger_economy.get_reserve_offers(player_name, item_name)
   return harberger_economy.with_storage(function (storage)
@@ -193,17 +207,33 @@ function harberger_economy.is_item(item_name)
   return minetest.registered_items[item_name] and item_name ~= ''
 end
 
+function harberger_economy.get_time_since_last_payement()
+  return harberger_economy.with_storage(
+    function (storage)
+      return storage.time_since_last_payment
+    end
+  )
+end
+
 function harberger_economy.set_reserve_price(player_name, item_name, price)
   return harberger_economy.with_storage(function (storage)
       if not harberger_economy.is_item(item_name) then
-        harberger_economy.log('warning', "Tried to set price of non-existent item " .. item_name .. ". Ignoring.")
+        harberger_economy.log(
+          'warning',
+          "Tried to set price of non-existent item "
+            .. item_name .. ". Ignoring."
+        )
         return
       end
       if price < 0 then
         -- While in theory negative valuations should be possible (I would pay
         -- for you to take this off my hands), but it becomes messy when the person
         -- can't actually afford to pay. So we disallow it.
-        harberger_economy.log('warning', "Tried to set price of item " .. item_name .. " to a negative number. Ignoring.")
+        harberger_economy.log(
+          'warning',
+          "Tried to set price of item " .. item_name
+            .. " to a negative number. Ignoring."
+        )
       end
       price = harberger_economy.round(price)
       local old_reserve = storage.reserve_offers[player_name][item_name]
@@ -424,7 +454,7 @@ function harberger_economy.get_tax_rate_bp(item_name)
       )
       -- We don't want the rate to be too small either
       local final_rate = math.max(capped_rate, scale)
-      return final_rate
+      return harberger_economy.round(final_rate)
     end
   )
 end
@@ -464,6 +494,26 @@ function harberger_economy.get_tax_owed(player_name)
     tax = tax + tax_entry.total_tax
   end
   return tax
+end
+
+function harberger_economy.get_basket_price()
+  return harberger_economy.with_storage(
+    function (storage)
+      -- Get's the price of the goods basket, used for inflation targeting.
+      -- The basket is the basket of goods people buy in a single day on average
+      local prices = harberger_economy.get_cheapest_offers()
+      local basket = 0
+      local days = minetest.get_gametime() / DAY_SECONDS * TIME_SPEED
+      for item_name, count in pairs(storage.total_buys) do
+        local price = prices[item_name]
+        if not price then
+          price = 0
+        end
+        basket = basket + count / days * price
+      end
+      return harberger_economy.round(basket)
+    end
+  )
 end
 
 
@@ -873,7 +923,7 @@ local function update_player(player)
 end
 
 -- TODO can remove with_storage from here by creating harberger_.. methods
-local function do_payments()
+local function calculate_basic_income()
   return harberger_economy.with_storage(
     function(storage)
       local payout = harberger_economy.round(
@@ -881,6 +931,15 @@ local function do_payments()
           * storage.time_since_last_payment
           / DAY_SECONDS * TIME_SPEED
       )
+      return payout
+    end
+  )
+end
+
+local function give_basic_income()
+  return harberger_economy.with_storage(
+    function(storage)
+      local payout = calculate_basic_income()
       for player, b in pairs(storage.initialized_players) do
         if b then
           harberger_economy.pay(nil, player, payout, {type='daily_income'}, true)
@@ -894,6 +953,7 @@ end
 local function do_charges()
   return harberger_economy.with_storage(
     function(storage)
+      local total_charges = 0
       for player, b in pairs(storage.initialized_players) do
         if b then
           local daily_tax_owed = harberger_economy.get_tax_owed(player)
@@ -902,10 +962,11 @@ local function do_charges()
               * storage.time_since_last_payment
               / DAY_SECONDS * TIME_SPEED
       )
-
+          total_charges = total_charges + payout
           harberger_economy.pay(player, nil, payout, {type='harberger_tax'}, true)
         end
       end
+      return total_charges
     end
   )
 end
@@ -929,6 +990,41 @@ local function do_quantity_integration()
   )
 end
 
+local function do_inflation_targeting(charges)
+  local basket_price = harberger_economy.get_basket_price()
+  if basket_price == 0 then
+    return false
+  end
+  local current_supply =
+    -harberger_economy.get_balance(harberger_economy.the_bank)
+  local target_price = harberger_economy.config.price_index
+  local target_supply = current_supply * target_price / basket_price
+  -- Prevent rapid hyper-inflation
+  local days_diff = harberger_economy.get_time_since_last_payement()
+    / DAY_SECONDS * TIME_SPEED
+  local max_ratio = math.pow(
+    harberger_economy.config.money_supply_rate_limit,
+    days_diff
+  )
+  target_supply = math.min(target_supply, current_supply * max_ratio)
+  local total_payout = target_supply - current_supply + charges
+  -- We don't remove money for inflation targeting, other than harberger taxes
+  -- (maybe we should)
+  total_payout = math.max(total_payout, 0)
+  local players = harberger_economy.get_players()
+  local per_player_payout = total_payout / #players
+  local basic_income = calculate_basic_income()
+  -- If we are dealing with small amounts of money we can ignore the max_ratio_limit
+  if per_player_payout < basic_income and max_ratio <= target_supply / current_supply then
+    per_player_payout = basic_income
+  end
+
+  for i, player in ipairs(players) do
+    harberger_economy.pay(nil, player, per_player_payout, {type='daily_income'}, true)
+  end
+  return true
+end
+
 
 local payment_period = DAY_SECONDS / TIME_SPEED
   / harberger_economy.config.payment_frequency
@@ -945,8 +1041,10 @@ local function update_function(dtime)
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
       if storage.time_since_last_payment >= payment_period then
         do_quantity_integration()
-        do_payments()
-        do_charges()
+        local charges = do_charges()
+        if not do_inflation_targeting(charges) then
+          give_basic_income()
+        end
         storage.time_since_last_payment = 0
       end
     end
