@@ -444,37 +444,43 @@ end
 -- END Persistent Inventory api
 
 -- BEGIN other api
+
+local function insert_item_table(x, y, columns, rows, offer_list, form_spec)
+  table.insert(form_spec, 'container[')
+  table.insert(form_spec, x)
+  table.insert(form_spec, ',')
+  table.insert(form_spec, y)
+  table.insert(form_spec, ']')
+  for i, offer in ipairs(offer_list) do
+    table.insert(form_spec, 'item_image_button[')
+    table.insert(form_spec, (i - 1) % columns)
+    table.insert(form_spec, ',')
+    table.insert(form_spec, math.floor((i - 1) / columns))
+    table.insert(form_spec, ';1.1,1.1;')
+    table.insert(form_spec, offer.item)
+    table.insert(form_spec, ';')
+    table.insert(form_spec, 'item_button:')
+    table.insert(form_spec, offer.item)
+    table.insert(form_spec, ';')
+    table.insert(form_spec, offer.label)
+    table.insert(form_spec, ']')
+  end
+  table.insert(form_spec, 'container_end[]')
+end
+
 function harberger_economy.show_buy_form(player_name)
   local form_name = 'harberger_economy:buy_form'
   local offers = harberger_economy.get_cheapest_offers(player_name)
   local num_offers = 0  -- # only works for lists not tables
+  local offer_list = {}
   for item, price in pairs(offers) do
-    num_offers = num_offers + 1
+    table.insert(offer_list, {item=item, label=price})
   end
   local columns = 8
-  local rows = math.ceil(num_offers/columns)
+  local rows = math.ceil(#offer_list/columns)
 
   local form_spec = {'size[', columns, ',', rows, ']'}
-  local i = 0
-  for item, price in pairs(offers) do
-    table.insert(form_spec, 'item_image_button[')
-    table.insert(form_spec, i % columns)
-    table.insert(form_spec, ',')
-    table.insert(form_spec, math.floor(i / columns))
-    table.insert(form_spec, ';1.2,1.2;')
-    table.insert(form_spec, item)
-    table.insert(form_spec, ';')
-    table.insert(form_spec, item)
-    table.insert(form_spec, ';')
-    -- if price >= 10000 then
-    --   price = math.floor(price / 1000)
-    --   price = price .. 'k'
-    -- end
-
-    table.insert(form_spec, price)
-    table.insert(form_spec, ']')
-    i = i + 1
-  end
+  insert_item_table(0, 0, columns, rows, offer_list, form_spec)
   form_spec = table.concat(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
@@ -501,22 +507,7 @@ function harberger_economy.show_price_form(player_name, item_name)
   table.insert(form_spec, price)
   table.insert(form_spec, ']')
   table.insert(form_spec, 'button[6,0;2,1.3;update;Update]')
-  table.insert(form_spec, 'container[0, 1]')
-  for i, offer in ipairs(offer_list) do
-    table.insert(form_spec, 'item_image_button[')
-    table.insert(form_spec, (i - 1) % columns)
-    table.insert(form_spec, ',')
-    table.insert(form_spec, math.floor((i - 1) / columns))
-    table.insert(form_spec, ';1.1,1.1;')
-    table.insert(form_spec, offer.item)
-    table.insert(form_spec, ';')
-    table.insert(form_spec, 'item_button:')
-    table.insert(form_spec, offer.item)
-    table.insert(form_spec, ';')
-    table.insert(form_spec, offer.label)
-    table.insert(form_spec, ']')
-  end
-  table.insert(form_spec, 'container_end[]')
+  insert_item_table(0, 1, columns, rows, offer_list, form_spec)
   form_spec = table.concat(form_spec)
   print(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
