@@ -28,6 +28,7 @@ harberger_economy.config = {
   update_delay = settings_get_number('harberger_economy.update_delay', 1),
   price_index = settings_get_number('harberger_economy.price_index', 10000),
   payment_frequency = settings_get_number('harberger_economy.payment_frequency', 1),
+  default_tax_rate_bp = settings_get_number('harberger_economy.default_tax_rate_bp', 10),
 }
 
 -- This is a default constant in minetest, but I can't seem to find it anywhere,
@@ -386,7 +387,7 @@ end
 
 -- Returns the tax rate in basis points (1/10000ths or 1/100 of a percent)
 function harberger_economy.get_tax_rate_bp(item_name)
-  return 10
+  return harberger_economy.config.default_tax_rate_bp
 end
 
 function harberger_economy.get_tax_owed(player_name)

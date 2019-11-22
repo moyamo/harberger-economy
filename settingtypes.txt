@@ -82,3 +82,9 @@ harberger_economy.price_index (Price index) int 10000 1 1000000000000
 # This can be a fraction (e.g. 0.5 is every second day). A day is 20 minutes by
 # default and can be changed by setting time_speed
 harberger_economy.payment_frequency (Payment frequency) float 1 0 1000000
+
+# The default tax rate for items that have not been sold yet, specified in basis
+# points. A basis point is 0.01%. Note that as soon as an item is sold a dynamic
+# tax rate will be computed.
+#
+harberger_economy.default_tax_rate_bp (Default tax rate [basis points]) float 10 0 1000000
