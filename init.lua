@@ -946,6 +946,30 @@ minetest.register_on_joinplayer(
   end
 )
 
+if sfinv then
+  sfinv.register_page("harberger_economy:inventory", {
+    title = "Economy",
+    get = function(self, player, context)
+      return sfinv.make_formspec(
+        player,
+        context,
+        "button[0.1,0.1;1,1;buy;Buy]"
+          .. "button[0.1,2.1;1,1;price;Price]",
+        false
+      )
+    end,
+
+    on_player_receive_fields = function(self, player, context, fields)
+      if fields.buy then
+        harberger_economy.show_buy_form(player:get_player_name())
+      elseif fields.price then
+        harberger_economy.show_price_form(player:get_player_name())
+      end
+    end,
+  })
+end
+
+
 
 -- END Call backs
 
