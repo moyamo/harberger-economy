@@ -178,9 +178,13 @@ function harberger_economy.get_reserve_offer(player_name, item_name)
   end)
 end
 
+function harberger_economy.is_item(item_name)
+  return minetest.registered_items[item_name] and item_name ~= ''
+end
+
 function harberger_economy.set_reserve_price(player_name, item_name, price)
   return harberger_economy.with_storage(function (storage)
-      if not minetest.registered_items[item_name] then
+      if not harberger_economy.is_item(item_name) then
         harberger_economy.log('warning', "Tried to set price of non-existent item " .. item_name .. ". Ignoring.")
         return
       end
@@ -728,7 +732,7 @@ minetest.register_chatcommand(
     func = function (player_name, params)
       params = string.split(params, ' ')
       local item_name = params[1]
-      if not minetest.registered_items[item_name] then
+      if harberger_economy.is_item(item_name) then
         item_name = nil
       end
       local price = tonumber(params[2])
