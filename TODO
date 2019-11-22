@@ -20,3 +20,13 @@ Unfreeze account and restore prices as soon as person reaches a positive balance
 # Warn person before they go bankrupt, maybe like a minute before the auction
 
 # Don't delete old schema upgrade instead
+
+# BUG: If you buy a one of a kind thing the price is set to a new calculated
+  price instead of the price you bought it at (because removing it from the
+  market means it has no more value)
+
+# BUG: Wear and metadata is ignore, so if you buy a broken tool, you will get a
+  fixed tool. I should probably use wear and metadata as keys in the auction
+  somehow (or make wear linearly cheaper). Or probably just ignore them because
+  it is easier.
+ 

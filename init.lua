@@ -143,6 +143,9 @@ end
 
 -- BEGIN public storage api
 
+-- TODO all this functions should validate all their inputs
+-- TODO logging should put tostring around args since a failure might be caused by non string type
+
 function harberger_economy.initialize_player(player)
   return harberger_economy.with_storage(function (storage)
       local player_name = player:get_player_name()
@@ -213,6 +216,8 @@ end
 function harberger_economy.reason_to_string(reason)
   if reason.type == 'daily_income' then
     return 'Daily income'
+  elseif reason.type == 'buy' then
+    return 'Bought ' .. reason.item_stack
   else
     harberger_economy.log('error', 'Reason for payment' .. reason .. ' is unknown.')
   end
@@ -312,7 +317,6 @@ end
 
 function harberger_economy.get_cheapest_offers(buying_player_name)
   local offers = harberger_economy.get_offers(buying_player_name)
-  print("offers" .. dump(offers))
   local cheapest_offers = {}
   for item_name, offer_list in pairs(offers) do
     for i, offer in ipairs(offer_list) do
@@ -323,9 +327,52 @@ function harberger_economy.get_cheapest_offers(buying_player_name)
       end
     end
   end
-  print('Cheapest' .. dump(cheapest_offers))
   return cheapest_offers
 end
+
+function harberger_economy.buy(player_name, item_name)
+  return harberger_economy.with_storage(
+    function (storage)
+      local offers = harberger_economy.get_offers(player_name)[item_name]
+      if not offers then
+        harberger_economy.log(
+          'warning',
+          tostring(player_name)
+            .. ' tried to buy ' .. tostring(item_name)
+            .. ' but no offers were available.'
+        )
+        return false
+      end
+      table.sort(offers, function (a, b) return a.price < b.price end)
+      print(dump(offers))
+      for i, offer in ipairs(offers) do
+        if offer.location.type ~= 'player' then
+          harberger_economy.log('error', 'Operation not supported yet: Tried to buy from a chest.')
+        else
+          local seller = offer.location.name
+          local item = persistent_inventory_try_to_remove_one(seller, item_name)
+          if item then
+            local reason = {type='buy', buyer=player_name, seller=seller, item_stack=item_name, offer=offer}
+            local pay = harberger_economy.pay(player_name, seller, offer.price, reason, false)
+            if not pay then
+              persistent_inventory_try_to_add_one(seller, item_name)
+              local error_string = "Cannot buy " .. tostring(item_name) .. ". Not enough funds."
+              minetest.chat_send_player(player_name, error_string)
+              harberger_economy.log('warning', tostring(player_name) .. " " .. error_string)
+              return false
+            else
+              persistent_inventory_try_to_add_one(player_name, item_name)
+              return true
+            end
+          end
+        end
+      end
+      return true
+    end
+  )
+end
+
+
 
 -- END public storage api
 
@@ -379,35 +426,63 @@ local function create_ro_detached_inventory(inventory_name)
   return minetest.get_inventory({type="detached", name=inventory_name})
 end
 
+local function apply_change_to_inventory(change, inventory)
+  if change.type == 'remove' then
+    return inventory:remove_item(change.list_name, change.item_stack)
+  elseif change.type == 'add' then
+    return inventory:add_item(change.list_name, change.item_stack)
+  end
+end
+
+local function store_detached_inventory(inventory_name)
+  harberger_economy.with_storage(
+    function (storage)
+      local inv = minetest.get_inventory({type="detached", name=inventory_name})
+      local serialized = {}
+      for list_name, list_value in pairs(inv:get_lists()) do
+        local width = inv:get_width(list_name)
+        local size = inv:get_size(list_name)
+        serialized[list_name] = {width=width, size=size, value={}}
+        for i, item in ipairs(list_value) do
+          serialized[list_name].value[i] = item:to_string()
+        end
+      end
+      storage.detached_inventories[inventory_name] = serialized
+    end
+  )
+end
+
+local function add_inventory_change(player_name, change)
+  harberger_economy.with_storage(
+    function (storage)
+      table.insert(storage.inventory_change_list[player_name], change)
+    end
+  )
+end
+
 local function update_persistent_inventory(player)
   harberger_economy.with_storage(
     function (storage)
       local player_name = player:get_player_name()
+      local player_inv = minetest.get_inventory({type="player", name=player_name})
       -- BEGIN Apply changelist
       local list = storage.inventory_change_list[player_name]
       for i, a in ipairs(list) do
-        -- TODO
+        apply_change_to_inventory(a, player_inv)
       end
       storage.inventory_change_list[player_name] = {}
       -- END Apply changelist
       -- BEGIN Copy inventory
       local inventory_name = get_inventory_copy_name(player_name)
       local copy_inv = create_ro_detached_inventory(inventory_name)
-      local player_inv = minetest.get_inventory({type="player", name=player_name})
-      local serialized = {}
       for list_name, list_value in pairs(player_inv:get_lists()) do
         local width = player_inv:get_width(list_name)
         local size = player_inv:get_size(list_name)
         copy_inv:set_size(list_name, size)
         copy_inv:set_width(list_name, width)
         copy_inv:set_list(list_name, list_value)
-        serialized[list_name] = {width=width, size=size}
-        serialized[list_name].value = {}
-        for i, item in ipairs(list_value) do
-          serialized[list_name].value[i] = item:to_string()
-        end
       end
-      storage.detached_inventories[inventory_name] = serialized
+      store_detached_inventory(inventory_name)
       -- END Copy Inventory
     end
   )
@@ -444,10 +519,44 @@ function persistent_inventory_get_items(player_name)
   return lists
 end
 
+function persistent_inventory_try_to_add_one(player_name, item_name)
+  local inventory_name = get_inventory_copy_name(player_name)
+  local copy_inv = get_persistent_detached_inventory(inventory_name)
+  for list_name, list in pairs(copy_inv:get_lists()) do
+    if list_name ~= 'craftpreview' then
+      local change = {type='add', list_name=list_name, item_stack=item_name}
+      local result = apply_change_to_inventory(change, copy_inv)
+      add_inventory_change(player_name, change)
+      if result:is_empty() then
+        return true
+      end
+    end
+  end
+  return false
+end
+
+
+function persistent_inventory_try_to_remove_one(player_name, item_name)
+  local inventory_name = get_inventory_copy_name(player_name)
+  local copy_inv = get_persistent_detached_inventory(inventory_name)
+  for list_name, list in pairs(copy_inv:get_lists()) do
+    if list_name ~= 'craftpreview' then
+      local change = {type='remove', list_name=list_name, item_stack=item_name}
+      local result = apply_change_to_inventory(change, copy_inv)
+      add_inventory_change(player_name, change)
+      if not result:is_empty() then
+        return true
+      end
+    end
+  end
+  return false
+end
 
 -- END Persistent Inventory api
 
 -- BEGIN other api
+
+local item_button_prefix = "item_button:"
 
 local function insert_item_table(x, y, columns, rows, offer_list, form_spec)
   table.insert(form_spec, 'container[')
@@ -463,7 +572,7 @@ local function insert_item_table(x, y, columns, rows, offer_list, form_spec)
     table.insert(form_spec, ';1.1,1.1;')
     table.insert(form_spec, offer.item)
     table.insert(form_spec, ';')
-    table.insert(form_spec, 'item_button:')
+    table.insert(form_spec, item_button_prefix)
     table.insert(form_spec, offer.item)
     table.insert(form_spec, ';')
     table.insert(form_spec, offer.label)
@@ -472,14 +581,24 @@ local function insert_item_table(x, y, columns, rows, offer_list, form_spec)
   table.insert(form_spec, 'container_end[]')
 end
 
+local function get_item_button_pressed(fields)
+  for k, v in pairs(fields) do
+    if k:sub(1, #item_button_prefix) == item_button_prefix then
+      local item_name = k:sub(#item_button_prefix + 1, #k)
+      return item_name
+    end
+  end
+  return nil
+end
+
 function harberger_economy.show_buy_form(player_name)
   local form_name = 'harberger_economy:buy_form'
   local offers = harberger_economy.get_cheapest_offers(player_name)
-  local num_offers = 0  -- # only works for lists not tables
   local offer_list = {}
   for item, price in pairs(offers) do
     table.insert(offer_list, {item=item, label=price})
   end
+  table.sort(offer_list, function (a, b) return a.item < b.item end)
   local columns = 8
   local rows = math.ceil(#offer_list/columns)
 
@@ -488,6 +607,22 @@ function harberger_economy.show_buy_form(player_name)
   form_spec = table.concat(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
+
+minetest.register_on_player_receive_fields(
+  function(player, form_name, fields)
+    if form_name ~= 'harberger_economy:buy_form' then
+      return false
+    end
+    local player_name = player:get_player_name()
+    local item_to_buy = get_item_button_pressed(fields)
+    if item_to_buy then
+      harberger_economy.buy(player_name, item_to_buy)
+      harberger_economy.show_buy_form(player_name)
+    end
+    return true
+  end
+)
+
 
 function harberger_economy.show_price_form(player_name, item_name)
   if not item_name then
@@ -513,7 +648,6 @@ function harberger_economy.show_price_form(player_name, item_name)
   table.insert(form_spec, 'button[6,0;2,1.3;update;Update]')
   insert_item_table(0, 1, columns, rows, offer_list, form_spec)
   form_spec = table.concat(form_spec)
-  print(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
 
@@ -533,13 +667,10 @@ minetest.register_on_player_receive_fields(
       end
       return true
     end
-    local prefix = "item_button:"
-    for k, v in pairs(fields) do
-      if k:sub(1, #prefix) == prefix then
-        local new_item_name = k:sub(#prefix + 1, #k)
-        harberger_economy.show_price_form(player_name, new_item_name)
-        return true
-      end
+    local new_item_name = get_item_button_pressed(fields)
+    if new_item_name then
+      harberger_economy.show_price_form(player_name, new_item_name)
+      return true
     end
     return true
   end
