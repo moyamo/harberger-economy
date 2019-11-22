@@ -430,27 +430,31 @@ function harberger_economy.get_tax_rate_bp(item_name)
 end
 
 function harberger_economy.get_tax_per_item(player_name)
-  local offers = harberger_economy.get_offers(nil)
-  local tax = {}
-  for item_name, offer_list in pairs(offers) do
-    local tax_rate =  harberger_economy.get_tax_rate_bp(item_name) / 10000
-    local total_tax = 0
-    local count = 0
-    for i, offer in ipairs(offer_list) do
-      if offer.location.type ~= 'player' then
-        harberger_economy.log("error", 'Non player inventories not supported and will not correctly be taxed')
-      elseif offer.location.name == player_name then
-        count = count + offer.count
-        total_tax = total_tax + offer.price * offer.count * tax_rate
+  return harberger_economy.batch_storage(
+    function()
+      local offers = harberger_economy.get_offers(nil)
+      local tax = {}
+      for item_name, offer_list in pairs(offers) do
+        local tax_rate =  harberger_economy.get_tax_rate_bp(item_name) / 10000
+        local total_tax = 0
+        local count = 0
+        for i, offer in ipairs(offer_list) do
+          if offer.location.type ~= 'player' then
+            harberger_economy.log("error", 'Non player inventories not supported and will not correctly be taxed')
+          elseif offer.location.name == player_name then
+            count = count + offer.count
+            total_tax = total_tax + offer.price * offer.count * tax_rate
+          end
+        end
+        if count > 0 then
+          local average_price = total_tax / count / tax_rate
+          tax[item_name] = {tax_rate=tax_rate, count=count,
+                            total_tax=total_tax, average_price=average_price}
+        end
       end
+      return tax
     end
-    if count > 0 then
-      local average_price = total_tax / count / tax_rate
-      tax[item_name] = {tax_rate=tax_rate, count=count,
-                        total_tax=total_tax, average_price=average_price}
-    end
-  end
-  return tax
+  )
 end
 
 function harberger_economy.get_tax_owed(player_name)
@@ -952,6 +956,9 @@ end
 -- END Useful functions
 
 -- BEGIN Callbacks
+
+-- TODO make sure all of these use batched storage
+-- TODO profile everything, make sure everything is in O(n) time
 
 minetest.register_privilege(
   'harberger_economy:bank_clerk',
