@@ -390,19 +390,37 @@ function harberger_economy.get_tax_rate_bp(item_name)
   return harberger_economy.config.default_tax_rate_bp
 end
 
-function harberger_economy.get_tax_owed(player_name)
+function harberger_economy.get_tax_per_item(player_name)
   local offers = harberger_economy.get_offers(nil)
-  local tax = 0
+  local tax = {}
   for item_name, offer_list in pairs(offers) do
+    local tax_rate =  harberger_economy.get_tax_rate_bp(item_name) / 10000
+    local total_tax = 0
+    local count = 0
     for i, offer in ipairs(offer_list) do
       if offer.location.type ~= 'player' then
         harberger_economy.log("error", 'Non player inventories not supported and will not correctly be taxed')
       elseif offer.location.name == player_name then
-        tax = tax + offer.price * offer.count * harberger_economy.get_tax_rate_bp(item_name) / 10000
+        count = count + offer.count
+        total_tax = total_tax + offer.price * offer.count * tax_rate
       end
     end
+    if count > 0 then
+      local average_price = total_tax / count / tax_rate
+      tax[item_name] = {tax_rate=tax_rate, count=count,
+                        total_tax=total_tax, average_price=average_price}
+    end
   end
-  return harberger_economy.round(tax)
+  return tax
+end
+
+function harberger_economy.get_tax_owed(player_name)
+  local tax_per_item = harberger_economy.get_tax_per_item(player_name)
+  local tax = 0
+  for item_name, tax_entry in pairs(tax_per_item) do
+    tax = tax + tax_entry.total_tax
+  end
+  return tax
 end
 
 
@@ -655,6 +673,33 @@ minetest.register_on_player_receive_fields(
   end
 )
 
+function harberger_economy.show_tax_form(player_name, rate_or_amount)
+  if rate_or_amount ~= 'rate' and rate_or_amount ~= 'amount' and rate_or_amount ~= 'quantity' then
+    harberger_economy.log('warning', 'Invalid rate_or_amount defaulting to amount')
+    rate_or_amount = 'amount'
+  end
+  local form_name = 'harberger_economy:tax_form'
+  local tax_by_item = harberger_economy.get_tax_per_item(player_name)
+  local tax_list = {}
+  for item, tax_entry in pairs(tax_by_item) do
+    local label = ''
+    if rate_or_amount == 'amount' then
+      label = harberger_economy.round(tax_entry.total_tax)
+    elseif rate_or_amount == 'rate' then
+      label = string.format("%.2f", tax_entry.tax_rate * 100) .. '%'
+    elseif rate_or_amount == 'quantity' then
+      label = tax_entry.count
+    end
+    table.insert(tax_list, {item=item, label=label})
+  end
+  table.sort(tax_list, function (a, b) return a.item < b.item end)
+  local columns = 8
+  local rows = math.ceil(#tax_list/columns)
+  local form_spec = {'size[', columns, ',', rows, ']'}
+  insert_item_table(0, 0, columns, rows, tax_list, form_spec)
+  form_spec = table.concat(form_spec)
+  minetest.show_formspec(player_name, form_name, form_spec)
+end
 
 function harberger_economy.show_price_form(player_name, item_name)
   if not item_name then
@@ -907,6 +952,22 @@ minetest.register_chatcommand(
 )
 
 minetest.register_chatcommand(
+  'harberger_economy:tax',
+  {
+    params = '[amount (default)|rate]',
+    description = 'Show tax liability',
+    privs = {},
+    func = function (player_name, params)
+      print(params)
+      if params ~= 'rate' and params ~= 'amount' and params ~= 'quantity' then
+        params = nil
+      end
+      harberger_economy.show_tax_form(player_name, params)
+    end,
+  }
+)
+
+minetest.register_chatcommand(
   'harberger_economy:price',
   {
     params = '[item] [price]',
@@ -953,17 +1014,28 @@ if sfinv then
       return sfinv.make_formspec(
         player,
         context,
-        "button[0.1,0.1;1,1;buy;Buy]"
-          .. "button[0.1,2.1;1,1;price;Price]",
+        "button[0.1,0.1;2,1;buy;Buy]"
+          .. "button[0.1,1.1;2,1;price;Price]"
+          .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
+          .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
+          .. "button[2.1,4.1;2,1;item_quantity;Item Quantity]"
+        ,
         false
       )
     end,
 
     on_player_receive_fields = function(self, player, context, fields)
+      local player_name = player:get_player_name()
       if fields.buy then
-        harberger_economy.show_buy_form(player:get_player_name())
+        harberger_economy.show_buy_form(player_name)
       elseif fields.price then
-        harberger_economy.show_price_form(player:get_player_name())
+        harberger_economy.show_price_form(player_name)
+      elseif fields.tax_amount then
+        harberger_economy.show_tax_form(player_name, 'amount')
+      elseif fields.tax_rate then
+        harberger_economy.show_tax_form(player_name, 'rate')
+      elseif fields.item_quantity then
+        harberger_economy.show_tax_form(player_name, 'quantity')
       end
     end,
   })
