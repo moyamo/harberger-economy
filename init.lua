@@ -357,7 +357,6 @@ function harberger_economy.buy(player_name, item_name)
         return false
       end
       table.sort(offers, function (a, b) return a.price < b.price end)
-      print(dump(offers))
       for i, offer in ipairs(offers) do
         if offer.location.type ~= 'player' then
           harberger_economy.log('error', 'Operation not supported yet: Tried to buy from a chest.')
@@ -858,7 +857,7 @@ local function do_charges()
               / DAY_SECONDS * TIME_SPEED
       )
 
-          harberger_economy.pay(nil, player, payout, {type='harberger_tax'}, true)
+          harberger_economy.pay(player, nil, payout, {type='harberger_tax'}, true)
         end
       end
     end
@@ -958,7 +957,6 @@ minetest.register_chatcommand(
     description = 'Show tax liability',
     privs = {},
     func = function (player_name, params)
-      print(params)
       if params ~= 'rate' and params ~= 'amount' and params ~= 'quantity' then
         params = nil
       end
@@ -1018,7 +1016,7 @@ if sfinv then
           .. "button[0.1,1.1;2,1;price;Price]"
           .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
           .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
-          .. "button[2.1,4.1;2,1;item_quantity;Item Quantity]"
+          .. "button[4.1,2.1;2,1;item_quantity;Item Quantity]"
         ,
         false
       )
