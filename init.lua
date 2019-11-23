@@ -395,6 +395,13 @@ end
 function harberger_economy.buy(player_name, item_name)
   return harberger_economy.with_storage(
     function (storage)
+      local player = minetest.get_player_by_name(player_name)
+      if not player then
+        -- We need player location in case inventory full to drop item. Buying
+        -- while not logged in is currently not supported
+        harberger_economy.log('error', player_name .. " tried to buy an item without being logged in")
+        return false
+      end
       local offers = harberger_economy.get_offers(player_name)[item_name]
       if not offers then
         harberger_economy.log(
@@ -422,7 +429,13 @@ function harberger_economy.buy(player_name, item_name)
               harberger_economy.log('warning', tostring(player_name) .. " " .. error_string)
               return false
             else
-              persistent_inventory_try_to_add_one(player_name, item_name)
+              local result = persistent_inventory_try_to_add_one(player_name, item_name)
+
+              if not result then
+                -- TODO reverse this transaction
+                -- We just drop the item as it is convenient
+                minetest.item_drop(ItemStack(item_name), player, player:get_pos())
+              end
               on_successful_buy(item_name)
               return true
             end
