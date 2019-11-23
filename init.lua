@@ -91,18 +91,24 @@ local default_data = {
     -- See persistent inventory
   },
   time_since_last_payment = 0,
-  daily_income = harberger_economy.config.starting_income,
   quantity_days = {
     -- Quantity of an item on the market integrated over the number of days in the market
   },
   total_buys = {
     -- Number of times an item has been bought
   },
+  pos_to_region = {
+  },
+  region_to_owner = {
+  },
+  last_region = 0
 }
 
-local current_schema = '13'
+local current_schema = '14'
 local cached_storage = nil
 local batch_storage = 0
+-- TODO I think it should be fine to only save_storage at intervals and on server exit
+-- and only get storage at start. Otherwise we can manipulated cached_storage directly
 function harberger_economy.get_storage()
   if batch_storage == 0 then
     local data_string = harberger_economy.storage:get('data')
@@ -131,6 +137,7 @@ function harberger_economy.set_storage(data)
     }
     -- local thing = minetest.get_us_time()
     -- TODO Serialization takes about 5ms on a small world, which is too slow to run every tick
+    -- The best things is probably only run this every server_map_save_interval
     local data_string = minetest.serialize(data_with_schema)
     -- local last_thing = minetest.get_us_time()
     harberger_economy.storage:set_string('data', data_string)
@@ -557,6 +564,125 @@ function harberger_economy.get_basket_price()
   )
 end
 
+function harberger_economy.get_region(pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      return (((storage.pos_to_region[pos.x] or {})[pos.y]) or {})[pos.z]
+    end
+  )
+end
+
+function harberger_economy.get_owner_of_region(region)
+  return harberger_economy.with_storage(
+    function (storage)
+      return storage.region_to_owner[region]
+    end
+  )
+end
+
+function harberger_economy.get_owner_of_pos(pos)
+  print("Pos " .. dump(pos) .. "is owned by ")
+  local region = harberger_economy.get_region(pos)
+  if region then
+    local owner = harberger_economy.get_owner_of_region(region)
+    print(owner)
+    return owner
+  end
+end
+
+function harberger_economy.set_region(pos, region)
+  return harberger_economy.with_storage(
+    function (storage)
+      if not storage.pos_to_region[pos.x] then
+        storage.pos_to_region[pos.x] = {}
+      end
+      if not storage.pos_to_region[pos.x][pos.y] then
+        storage.pos_to_region[pos.x][pos.y] = {}
+      end
+      storage.pos_to_region[pos.x][pos.y][pos.z] = region
+    end
+  )
+end
+
+
+function harberger_economy.surrounding_regions(pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      local surrounding_areas = {}
+      for dx = -1,1 do
+        for dy = -1,1 do
+          for dz = -1,1 do
+            if dx ~= 0 or dy ~= 0 or dz ~= 0 then
+              local new_pos = {x = pos.x + dx, y = pos.y + dy, z = pos.z + dz}
+              local region = harberger_economy.get_region(new_pos)
+              print("Pos " .. dump(new_pos) .. ' has region ' .. dump(region))
+              if region then
+                surrounding_areas[region] = true
+              end
+            end
+          end
+        end
+      end
+      return surrounding_areas
+    end
+  )
+end
+
+-- Merge small into large
+function harberger_economy.merge_region(large, small)
+  harberger_economy.with_storage(
+    function (storage)
+      if small == large then
+        harberger_economy.log('warn', "Tried to merge an area with itself. Ignoring")
+        return
+      end
+      for x, a in pairs(storage.pos_to_region) do
+        for y, b in pairs(a) do
+          for z, region in pairs(b) do
+            if region == small then
+              storage.pos_to_region[x][y][z] = large
+            end
+          end
+        end
+      end
+      storage.region_to_owner[small] = nil
+    end
+  )
+end
+
+function harberger_economy.claim_node(player_name, pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      local surrounding = harberger_economy.surrounding_regions(pos)
+      print('Surrounding' .. dump(surrounding))
+      local my_surrounding = {}
+      for region, b in pairs(surrounding) do
+        if storage.region_to_owner[region] == player_name then
+          table.insert(my_surrounding, region)
+        end
+      end
+      print('My surrounding ' .. dump(my_surrounding))
+      if #my_surrounding == 0 then
+        local my_region = storage.last_region + 1
+        storage.last_region = my_region
+        storage.region_to_owner[my_region] = player_name
+        harberger_economy.set_region(pos, my_region)
+      elseif  #my_surrounding == 1 then
+        harberger_economy.set_region(pos, my_surrounding[1])
+      else
+        local my_region = my_surrounding[1]
+        for i, region in ipairs(my_surrounding) do
+          if i ~= 1 then
+            harberger_economy.merge_region(my_region, region)
+          end
+        end
+        harberger_economy.set_region(pos, my_region)
+      end
+      print('regions '.. dump(storage.pos_to_region))
+      print('owner '.. dump(storage.region_to_owner))
+    end
+  )
+end
 
 -- END public storage api
 
@@ -968,7 +1094,7 @@ local function calculate_basic_income()
   return harberger_economy.with_storage(
     function(storage)
       local payout = harberger_economy.round(
-        storage.daily_income
+        harberger_economy.config.starting_income
           * storage.time_since_last_payment
           / DAY_SECONDS * TIME_SPEED
       )
@@ -1301,6 +1427,25 @@ if sfinv then
       end
     end,
   })
+end
+
+minetest.register_on_placenode(
+  function (pos, newnode, placer, oldnode, itemstack, pointed_thing)
+    if placer:is_player() then
+      local player_name = placer:get_player_name()
+      harberger_economy.claim_node(player_name, pos)
+    end
+  end
+)
+
+local old_protected = minetest.is_protected
+function minetest.is_protected(pos, player_name)
+  -- Don't return false return old_protected
+  local owner = harberger_economy.get_owner_of_pos(pos)
+  if owner and owner ~= player_name then
+    return true
+  end
+  return old_protected(pos, player_name)
 end
 
 
