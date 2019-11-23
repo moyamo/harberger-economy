@@ -30,6 +30,7 @@ harberger_economy.config = {
   payment_frequency = settings_get_number('harberger_economy.payment_frequency', 1),
   default_tax_rate_bp = settings_get_number('harberger_economy.default_tax_rate_bp', 10),
   money_supply_rate_limit = settings_get_number('harberger_economy.money_supply_rate_limit', 10),
+  auction_percentage = settings_get_number('harberger_economy.auction_percentage', 20),
 }
 
 -- This is a default constant in minetest, but I can't seem to find it anywhere,
@@ -99,7 +100,7 @@ local default_data = {
   },
 }
 
-local current_schema = '12'
+local current_schema = '13'
 local cached_storage = nil
 local batch_storage = 0
 function harberger_economy.get_storage()
@@ -108,6 +109,7 @@ function harberger_economy.get_storage()
     if not data_string then
       cached_storage = default_data
     else
+      -- TODO deserialization takes about 5ms on a small world which is too slow to run every tick
       local data_with_schema = minetest.deserialize(data_string)
       if data_with_schema.schema ~= current_schema then
         cached_storage = default_data
@@ -122,12 +124,18 @@ end
 function harberger_economy.set_storage(data)
   cached_storage = data
   if batch_storage == 0 then
+    -- local start = minetest.get_us_time()
     local data_with_schema = {
       schema = current_schema,
       data = data,
     }
+    -- local thing = minetest.get_us_time()
+    -- TODO Serialization takes about 5ms on a small world, which is too slow to run every tick
     local data_string = minetest.serialize(data_with_schema)
+    -- local last_thing = minetest.get_us_time()
     harberger_economy.storage:set_string('data', data_string)
+    -- local last = minetest.get_us_time()
+    -- print("Saving took " .. (last - start) .. "us." .. " Serializing took " .. (last_thing - thing) .. "us. String size " .. #data_string)
   end
 end
 
@@ -191,7 +199,7 @@ function harberger_economy.get_players()
 end
 
 
-function harberger_economy.get_reserve_offers(player_name, item_name)
+function harberger_economy.get_reserve_offers(player_name)
   return harberger_economy.with_storage(function (storage)
       return storage.reserve_offers[player_name]
   end)
@@ -265,10 +273,12 @@ function harberger_economy.reason_to_string(reason)
         return 'Bought ' .. reason.item_stack
       elseif reason.type == 'harberger_tax' then
         return 'Harberger tax'
+      elseif reason.type == 'bankruptcy' then
+        return 'Bankruptcy'
       end
   end
-  harberger_economy.log('error', 'Reason for payment' .. tostring(reason) .. ' is unknown.')
-  return tostring(reason)
+  harberger_economy.log('warn', 'Reason for payment' .. dump(reason) .. ' is unknown.')
+  return dump(reason)
 end
 
 function harberger_economy.pay(from, to, amount, reason, can_be_negative)
@@ -380,6 +390,15 @@ function harberger_economy.get_cheapest_offers(buying_player_name)
   return cheapest_offers
 end
 
+function harberger_economy.reposses_assets(player_name)
+  local inv_list = persistent_inventory_get_items(player_name)
+  for list_name, list in pairs(inv_list) do
+    for index, item in ipairs(list) do
+      persistent_inventory_try_to_remove_one(player_name, item:to_string())
+    end
+  end
+end
+
 local function on_successful_buy(item_name)
   return harberger_economy.with_storage(
     function (storage)
@@ -463,7 +482,7 @@ function harberger_economy.get_tax_rate_bp(item_name)
       local scale = harberger_economy.config.default_tax_rate_bp
       local capped_rate = math.min(
         computed_tax_rate,
-        quantity_days * scale
+        math.max(buys * scale, quantity_days * scale)
       )
       -- We don't want the rate to be too small either
       local final_rate = math.max(capped_rate, scale)
@@ -507,6 +526,15 @@ function harberger_economy.get_tax_owed(player_name)
     tax = tax + tax_entry.total_tax
   end
   return tax
+end
+
+function harberger_economy.get_wealth(player_name)
+  local tax_per_item = harberger_economy.get_tax_per_item(player_name)
+  local wealth = 0
+  for item_name, tax_entry in pairs(tax_per_item) do
+    wealth = wealth + tax_entry.average_price * tax_entry.count
+  end
+  return wealth
 end
 
 function harberger_economy.get_basket_price()
@@ -1031,11 +1059,65 @@ local function do_inflation_targeting(charges)
   if per_player_payout < basic_income and max_ratio <= target_supply / current_supply then
     per_player_payout = basic_income
   end
-
+  harberger_economy.log(
+    'action',
+    'Inflation targeting: Price basket is ' .. basket_price
+      .. " it should be " .. target_price .. '. '
+      .. 'Trying to increase money supply from ' .. current_supply
+      .. ' to ' .. target_supply
+      .. ' by giving a payout of ' .. per_player_payout
+      .. ' * ' .. #players
+      ..' = ' .. (#players * per_player_payout)
+  )
   for i, player in ipairs(players) do
     harberger_economy.pay(nil, player, per_player_payout, {type='daily_income'}, true)
   end
   return true
+end
+
+local function do_auction()
+  -- When a player has a negative balance auction off their items by decreasing the prices
+  local day_frac = harberger_economy.get_time_since_last_payement() / DAY_SECONDS * TIME_SPEED
+  local rate = math.pow(1 - harberger_economy.config.auction_percentage/100, day_frac)
+  for i, player_name in ipairs(harberger_economy.get_players()) do
+    if harberger_economy.get_balance(player_name) < 0 then
+      local display_rate = string.format("%.2f", (1 - rate) * 100) .. '%'
+      minetest.chat_send_player(
+        player_name,
+        "You have a negative balance. "
+          .. "Your items are being auctioned off. "
+          .. "Prices of all your items have been decrease by " .. display_rate .. '.'
+      )
+      harberger_economy.log(
+        'action',
+        player_name .. ' has a negative balance.'
+          .. ' Their items are being auctioned off at '
+          .. display_rate .. '.'
+      )
+      local offers = harberger_economy.get_reserve_offers(player_name)
+      for item_name, offer in pairs(offers) do
+        local new_price = harberger_economy.round(offer.price * rate)
+        harberger_economy.set_reserve_price(player_name, item_name, new_price)
+      end
+    end
+  end
+end
+
+local function do_bankruptcy()
+  -- When a player's wealth can't cover their debt seize their items and set their balance to zero
+  for i, player_name in ipairs(harberger_economy.get_players()) do
+    local balance = harberger_economy.get_balance(player_name)
+    if balance < 0 then
+      local wealth = harberger_economy.get_wealth(player_name)
+      if balance + wealth < 0 then
+        local message = " been declared insolvent. Repossessing and setting to zero."
+        minetest.chat_send_player(player_name, 'You have' .. message)
+        harberger_economy.log('action', player_name .. ' has' .. message)
+        harberger_economy.pay(nil, player_name, -balance, {type='bankruptcy'}, true)
+        harberger_economy.reposses_assets(player_name)
+      end
+    end
+  end
 end
 
 
@@ -1058,6 +1140,8 @@ local function update_function(dtime)
         if not do_inflation_targeting(charges) then
           give_basic_income()
         end
+        do_auction()
+        do_bankruptcy()
         storage.time_since_last_payment = 0
       end
     end

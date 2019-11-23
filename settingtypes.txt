@@ -93,5 +93,11 @@ harberger_economy.default_tax_rate_bp (Default tax rate [basis points]) float 10
 # default is that the money supply is allowed to increase 10x in a day). This limit exists to
 # prevent hyper-inflation. If you are experiencing hyper-inflation try lowering
 # the limit. If you are experience deflation increase this limit.
-
 harberger_economy.money_supply_rate_limit (Money supply rate lime) float 10 0 1000000
+
+# When a player has a negative balance his items are "auctioned" off. All his
+# prices are periodically decreased by a fixed percentage until he has a
+# positive balance. This is the percentage that the price of all his items will
+# decrease by in a day. (Default 20%)
+
+harberger_economy.auction_percentage (Auction percentage) float 20 0 100
