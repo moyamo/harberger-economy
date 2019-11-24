@@ -236,7 +236,16 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
         harberger_economy.log(
           'warning',
           "Tried to set price of non-existent item "
-            .. item_name .. ". Ignoring."
+            .. tostring(item_name) .. ". Ignoring."
+        )
+        return
+      end
+      price = tonumber(price)
+      if not price then
+        harberger_economy.log(
+          'warning',
+          "Tried to set invalid price of item " .. item_name
+            .. ". Ignoring."
         )
         return
       end
@@ -249,6 +258,7 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
           "Tried to set price of item " .. item_name
             .. " to a negative number. Ignoring."
         )
+        return
       end
       price = harberger_economy.round(price)
       local old_reserve = storage.reserve_offers[player_name][item_name]
@@ -261,6 +271,12 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
 end
 
 function harberger_economy.get_default_price(item_name)
+  --[[
+    When a player gets a new item if there is no reserve price
+    1. Set the reserve price to current selling price
+    2. If there is no selling price then set it to game_time / days * daily_price_basket
+    (i.e. it took this much game time to get so it's probably worth that)
+  --]]
   local cheapest_offers = harberger_economy.get_cheapest_offers()
   if cheapest_offers[item_name] then
     return cheapest_offers[item_name]
@@ -418,6 +434,18 @@ local function on_successful_buy(item_name)
   )
 end
 
+local function handle_price_signal(player_name, item_name, price)
+  local offer = harberger_economy.get_reserve_offer(player_name, item_name)
+  local old_price = (offer and offer.price) or 0
+  if old_price < price then
+    minetest.chat_send_player(
+      player_name,
+      "Reserve price for " .. item_name .. "increased to buying price of " .. price .. "."
+    )
+    harberger_economy.set_reserve_price(player_name, item_name, price)
+  end
+end
+
 function harberger_economy.buy(player_name, item_name)
   return harberger_economy.with_storage(
     function (storage)
@@ -443,6 +471,9 @@ function harberger_economy.buy(player_name, item_name)
         if offer.location.type ~= 'player' then
           harberger_economy.log('error', 'Operation not supported yet: Tried to buy from a chest.')
         else
+          -- If the player was willing to buy at the price his reserve price
+          -- should be higher
+          handle_price_signal(player_name, item_name, offer.price)
           local seller = offer.location.name
           local item = persistent_inventory_try_to_remove_one(seller, item_name)
           if item then
@@ -1223,7 +1254,7 @@ local function do_inflation_targeting(charges)
     'Inflation targeting: Price basket is ' .. basket_price
       .. " it should be " .. target_price .. '. '
       .. 'Trying to increase money supply from ' .. current_supply
-      .. ' to ' .. target_supply
+      .. ' to ' .. harberger_economy.round(target_supply)
       .. ' by giving a payout of ' .. per_player_payout
       .. ' * ' .. #players
       ..' = ' .. (#players * per_player_payout)
@@ -1484,28 +1515,3 @@ end
 
 
 -- END Call backs
-
--- minetest.register_on_placenode(
---   function(pos, newnode, placer, oldnode, itemstack, pointed_thing)
---     local meta = minetest.get_meta(pos)
---     print("harberger_economy (on_placenode): "
---             .. dump(pos) .. " "
---             .. dump(newnode) .. " "
---             .. dump(placer) .. " "
---             .. dump(oldnode) .. " "
---             .. dump(itemstack) .. " "
---             .. dump(pointed_thing) .. " "
---             .. dump(meta:to_table()) .. " "
---     )
-
-
-
---   end
--- )
-
---[[
-When a player gets a new item if there is no reserve price
-  1. Set the reserve price to current selling price +10%
-  2. If there is no selling price then set it to game_time / days * daily_price_basket
-  (i.e. it took this much game time to get so it's probably worth that)
---]]
