@@ -1481,50 +1481,6 @@ function minetest.is_protected(pos, player_name)
   return old_protected(pos, player_name)
 end
 
-local function patch_inventory(old_function)
-  return function(...)
-    local r
-    print("Running patched")
-    if old_function then -- if there is old function
-      r = old_function(unpack(arg))
-    elseif arg[6] then -- count
-      r = arg[6]
-    else
-      r = arg[4]:get_count() -- stack
-    end
-    local player_name = arg[#arg]:get_player_name()
-    if r ~= 0 and player_name then
-
-      local pos = arg[1]
-      local owner = harberger_economy.get_owner_of_pos(pos)
-      if owner and player_name ~= owner then
-        harberger_economy.log(
-          'action',
-          player_name .. 'tried to access a chest at '
-            .. minetest.pos_to_string(pos) .. ' owned by'
-            .. owner .. '.'
-        )
-        return 0
-      else
-        return r
-      end
-    else
-      return r
-    end
-  end
-end
-
-minetest.register_on_mods_loaded(
-  function ()
-    for name, def in pairs(minetest.registered_nodes) do
-      def.allow_metadata_inventory_move = patch_inventory(def.allow_metadata_inventory_move)
-      def.allow_metadata_inventory_put = patch_inventory(def.allow_metadata_inventory_put)
-      def.allow_metadata_inventory_take = patch_inventory(def.allow_metadata_inventory_take)
-    end
-  end
-)
-
-
 
 
 -- END Call backs
