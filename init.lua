@@ -581,11 +581,9 @@ function harberger_economy.get_owner_of_region(region)
 end
 
 function harberger_economy.get_owner_of_pos(pos)
-  print("Pos " .. dump(pos) .. "is owned by ")
   local region = harberger_economy.get_region(pos)
   if region then
     local owner = harberger_economy.get_owner_of_region(region)
-    print(owner)
     return owner
   end
 end
@@ -615,7 +613,6 @@ function harberger_economy.surrounding_regions(pos)
             if dx ~= 0 or dy ~= 0 or dz ~= 0 then
               local new_pos = {x = pos.x + dx, y = pos.y + dy, z = pos.z + dz}
               local region = harberger_economy.get_region(new_pos)
-              print("Pos " .. dump(new_pos) .. ' has region ' .. dump(region))
               if region then
                 surrounding_areas[region] = true
               end
@@ -654,14 +651,12 @@ function harberger_economy.claim_node(player_name, pos)
   return harberger_economy.with_storage(
     function (storage)
       local surrounding = harberger_economy.surrounding_regions(pos)
-      print('Surrounding' .. dump(surrounding))
       local my_surrounding = {}
       for region, b in pairs(surrounding) do
         if storage.region_to_owner[region] == player_name then
           table.insert(my_surrounding, region)
         end
       end
-      print('My surrounding ' .. dump(my_surrounding))
       if #my_surrounding == 0 then
         local my_region = storage.last_region + 1
         storage.last_region = my_region
@@ -678,8 +673,6 @@ function harberger_economy.claim_node(player_name, pos)
         end
         harberger_economy.set_region(pos, my_region)
       end
-      print('regions '.. dump(storage.pos_to_region))
-      print('owner '.. dump(storage.region_to_owner))
     end
   )
 end
@@ -1054,26 +1047,66 @@ end
 local hud_table = {}
 
 local function update_player_hud(player)
-  local hud_id = hud_table[player]
-  if hud_id then
-    player:hud_remove(hud_id)
+  local hud_ids = hud_table[player]
+  if hud_ids then
+    for i, hud_id in ipairs(hud_ids) do
+      player:hud_remove(hud_id)
+    end
   end
+  hud_table[player] = {}
   local player_name = player:get_player_name()
   local balance = harberger_economy.get_balance(player_name)
   local colour = 0x00FF00
   if balance < 0 then
     colour = 0xFF0000
   end
-  hud_table[player] = player:hud_add(
-    {
-      hud_elem_type = "text",
-      position = {x = 1, y = 0},
-      alignment = {x = -1, y = 1},
-      offset = {x=-12, y = 6},
-      number = colour,
-      text = "Balance: " .. harberger_economy.get_balance(player_name)
-    }
-  )
+  table.insert(
+    hud_table[player],
+    player:hud_add(
+      {
+        hud_elem_type = "text",
+        position = {x = 1, y = 0},
+        alignment = {x = -1, y = 1},
+        offset = {x=-12, y = 6},
+        number = colour,
+        text = "Balance: " .. balance
+      }
+  ))
+  local player_pos = player:get_pos()
+  local eye_offset = player:get_eye_offset()
+  local look_dir =  player:get_look_dir()
+  -- Add look dir so we don't intersect our own eyes
+  local eye_pos = vector.add(vector.add(player_pos, eye_offset), 0)
+  local eye_height = player:get_properties().eye_height
+  eye_pos.y = eye_pos.y + eye_height
+  local end_point = vector.add(eye_pos, vector.multiply(look_dir, 5))
+  local raycast = minetest.raycast(eye_pos, end_point, false)
+  local pointed = raycast:next()
+  if pointed then
+    local under = pointed.under
+    if under then
+      local owner = harberger_economy.get_owner_of_pos(under)
+      local region = harberger_economy.get_region(under)
+      local color = 0x00FF00
+      if owner ~= player_name then
+        color = 0xFF0000
+      end
+      if owner then
+        table.insert(
+          hud_table[player],
+          player:hud_add(
+            {
+              hud_elem_type = "text",
+              position = {x = 1, y = 0},
+              alignment = {x = -1, y = 1},
+              offset = {x=-12, y = 24},
+              number = color,
+              text = "Block in region " .. region .. " owned by " .. owner
+            }
+        ))
+      end
+    end
+  end
 end
 
 local function update_player(player)
