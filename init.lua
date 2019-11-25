@@ -1650,7 +1650,7 @@ minetest.register_on_protection_violation(
   end
 )
 
-function  harberger_economy.item_place_hook(itemstack, placer, pointed_thing, param2)
+function  harberger_economy.item_place_hook(itemstack, placer, pointed_thing)
   if placer and placer:get_player_name() then
     local player_name = placer:get_player_name()
     if pointed_thing and pointed_thing.above then
@@ -1669,7 +1669,7 @@ function  harberger_economy.item_place_hook(itemstack, placer, pointed_thing, pa
   return true
 end
 
-local function call_on_rightclick(itemstack, placer, pointed_thing, param2)
+local function call_on_rightclick(itemstack, placer, pointed_thing)
   if (pointed_thing.type == "node" and placer and
       not placer:get_player_control().sneak) then
     local n = minetest.get_node(pointed_thing.under)
@@ -1685,12 +1685,11 @@ end
 
 local hide_formspec_prefix = 'haraberger_economy:hide_form_spec:'
 
-local old_item_place = minetest.item_place
-function minetest.item_place(itemstack, placer, pointed_thing, param2)
+local function emulate_formspec(itemstack, placer, pointed_thing)
   -- Try to mimic the behaviour of game.cpp:handlePointingAtNode:TheRightClickBranch
-  local continue, stack, bool = harberger_economy.item_place_hook(itemstack, placer, pointed_thing, param2)
+  local continue, stack, bool = harberger_economy.item_place_hook(itemstack, placer, pointed_thing)
   if not continue then
-    return stack, bool
+    return false, stack, bool
   end
   if pointed_thing and pointed_thing.under then
     local pos = pointed_thing.under
@@ -1710,10 +1709,29 @@ function minetest.item_place(itemstack, placer, pointed_thing, param2)
         .. node_name
         .. ":$%$:" .. minetest.pos_to_string(pos)
       minetest.show_formspec(player_name, form_name, formspec)
-      return call_on_rightclick(itemstack, placer, pointed_thing, param2)
+      return false, call_on_rightclick(itemstack, placer, pointed_thing)
     end
   end
+  return true
+end
+
+local old_item_place = minetest.item_place
+function minetest.item_place(itemstack, placer, pointed_thing, param2)
+  local continue, stack, bool = emulate_formspec(itemstack, placer, pointed_thing)
+  if not continue then
+    return stack, bool
+  end
   return old_item_place(itemstack, placer, pointed_thing, param2)
+end
+
+-- rotate and place node is sometines used instead of item_place so we must override that too
+local old_rotate_and_place_node = minetest.rotate_and_place
+function minetest.rotate_and_place(itemstack, placer, pointed_thing, infinitestacks, orient_flags, prevent_after_place)
+   local continue, stack, bool = emulate_formspec(itemstack, placer, pointed_thing)
+   if not continue then
+     return stack, bool
+   end
+   return old_rotate_and_place_node(itemstack, placer, pointed_thing, infinitestacks, orient_flags, prevent_after_place)
 end
 
 minetest.register_on_player_receive_fields(
