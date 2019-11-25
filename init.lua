@@ -1053,6 +1053,24 @@ minetest.register_on_player_receive_fields(
   end
 )
 
+function harberger_economy.get_owned_pos()
+  return harberger_economy.with_storage(
+    function (storage)
+      local list = {}
+      for x, a in pairs(storage.pos_to_region) do
+        for y, b in pairs(a) do
+          for z, region in pairs(b) do
+            if region then
+              table.insert(list, {x=x, y=y, z=z})
+            end
+          end
+        end
+      end
+      return list
+    end
+  )
+end
+
 -- END other api
 
 
@@ -1361,6 +1379,16 @@ local function do_bankruptcy()
   end
 end
 
+local function update_owned_nodes()
+  harberger_economy.with_storage(
+    function (storage)
+      for i, pos in ipairs(harberger_economy.get_owned_pos()) do
+        hide_formspec(pos)
+      end
+    end
+  )
+end
+
 
 local payment_period = DAY_SECONDS / TIME_SPEED
   / harberger_economy.config.payment_frequency
@@ -1373,6 +1401,7 @@ local function update_function(dtime)
       for i, player in ipairs(connected_players) do
         update_player(player)
       end
+      update_owned_nodes()
       -- Check if we should do payment
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
       if storage.time_since_last_payment >= payment_period then
