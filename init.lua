@@ -47,6 +47,14 @@ function harberger_economy.log(logtype, logmessage)
   minetest.log(logtype, 'harberger_economy: ' .. logmessage)
 end
 
+function harberger_economy.log_chat(logtype, logmessage, players)
+  harberger_economy.log(logtype, logmessage)
+  -- TODO use minetest colourize
+  for i, player in ipairs(players) do
+    minetest.chat_send_player(player, logmessage)
+  end
+end
+
 -- Rounds number stochastic ally
 function harberger_economy.round(n)
   local p = math.random()
@@ -617,6 +625,14 @@ function harberger_economy.get_owner_of_pos(pos)
     local owner = harberger_economy.get_owner_of_region(region)
     return owner
   end
+end
+
+function harberger_economy.is_not_owner(player_name, pos)
+  local owner = harberger_economy.get_owner_of_pos(pos)
+  if owner and player_name ~= owner then
+    return true
+  end
+  return false
 end
 
 function harberger_economy.set_region(pos, region)
@@ -1538,14 +1554,53 @@ minetest.register_on_placenode(
   end
 )
 
-local old_protected = minetest.is_protected
-function minetest.is_protected(pos, player_name)
-  -- Don't return false return old_protected
-  local owner = harberger_economy.get_owner_of_pos(pos)
-  if owner and owner ~= player_name then
+function harberger_economy.is_protected(pos, player_name)
+  if harberger_economy.is_not_owner(player_name, pos) then
     return true
   end
-  return old_protected(pos, player_name)
+  return false
+end
+
+local old_protected = minetest.is_protected
+function minetest.is_protected(pos, player_name)
+  return harberger_economy.is_protected(pos, player_name) or old_protected(pos, player_name)
+end
+
+minetest.register_on_protection_violation(
+  function(pos, player_name)
+    if harberger_economy.is_protected(pos, player_name) then
+      local inform_players = {player_name}
+      local owner = harberger_economy.get_owner_of_pos(pos)
+      local region = harberger_economy.get_region(pos)
+      local pos_string = minetest.pos_to_string(pos)
+      table.insert(inform_players, owner)
+      local message =
+        player_name
+        .. " tried to interact with node " .. pos_string
+        .. " in region " .. region
+        .. " owned by " .. owner
+      harberger_economy.log_chat("warning", message, inform_players)
+    end
+  end
+)
+
+function  harberger_economy.item_place_hook(itemstack, placer, pointed_thing, param2)
+  if placer and placer:get_player_name() then
+    local player_name = placer:get_player_name()
+    if pointed_thing and pointed_thing.above then
+      if harberger_economy.is_not_owner(player_name, pointed_thing.above) then
+        minetest.record_protection_violation(pointed_thing.above, player_name)
+        return false, itemstack, false
+      end
+    end
+    if pointed_thing and pointed_thing.under then
+      if harberger_economy.is_not_owner(player_name, pointed_thing.under) then
+        minetest.record_protection_violation(pointed_thing.under, player_name)
+        return false, itemstack, false
+      end
+    end
+  end
+  return true
 end
 
 local function call_on_rightclick(itemstack, placer, pointed_thing, param2)
@@ -1567,6 +1622,10 @@ local hide_formspec_prefix = 'haraberger_economy:hide_form_spec:'
 local old_item_place = minetest.item_place
 function minetest.item_place(itemstack, placer, pointed_thing, param2)
   -- Try to mimic the behaviour of game.cpp:handlePointingAtNode:TheRightClickBranch
+  local continue, stack, bool = harberger_economy.item_place_hook(itemstack, placer, pointed_thing, param2)
+  if not continue then
+    return stack, bool
+  end
   if pointed_thing and pointed_thing.under then
     local pos = pointed_thing.under
     local meta = minetest.get_meta(pos)
