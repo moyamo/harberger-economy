@@ -373,6 +373,7 @@ function harberger_economy.get_offers(buying_player_name)
   return harberger_economy.with_storage(
     function(storage)
       local offers = {}
+      -- Player inventory offers
       for player_name, b in pairs(storage.initialized_players) do
         if b and player_name ~= buying_player_name then
           local inv_list = persistent_inventory_get_items(player_name)
@@ -386,6 +387,7 @@ function harberger_economy.get_offers(buying_player_name)
                   end
                   local offer = {}
                   offer.location = {type='player', name=player_name}
+                  offer.player_name = player_name
                   local try_offer_price = harberger_economy.get_reserve_offer(player_name, item_name)
                   if try_offer_price then
                     offer.price = try_offer_price.price
@@ -395,6 +397,29 @@ function harberger_economy.get_offers(buying_player_name)
                     -- TODO we have to do nothing here because calling initialize
                     -- _reserve_price causes a recursive infinite loop
                   end
+                end
+              end
+            end
+          end
+        end
+      end
+      -- Player chest offers
+      for i, pos in ipairs(harberger_economy.get_owned_pos()) do
+        local location = {type='node', pos=pos}
+        local player_name =  harberger_economy.get_owner_of_pos(pos)
+        local inv = minetest.get_inventory(location)
+        if inv then
+          for list_name, list in pairs(inv:get_lists()) do
+            for index, item in ipairs(list) do
+              if not item:is_empty() then
+                local item_name = item:get_name()
+                offers[item_name] = offers[item_name] or {}
+                local offer = {location=location, player_name=player_name}
+                local try_offer_price = harberger_economy.get_reserve_offer(player_name, item_name)
+                if try_offer_price then
+                  offer.price = try_offer_price.price
+                  offer.count = item:get_count()
+                  table.insert(offers[item_name], offer)
                 end
               end
             end
@@ -476,15 +501,29 @@ function harberger_economy.buy(player_name, item_name)
       end
       table.sort(offers, function (a, b) return a.price < b.price end)
       for i, offer in ipairs(offers) do
-        if offer.location.type ~= 'player' then
-          harberger_economy.log('error', 'Operation not supported yet: Tried to buy from a chest.')
+        if offer.location.type ~= 'player' and offer.location.type ~= 'node' then
+          harberger_economy.log('error', 'Operation not supported yet: Tried to buy from a detached inventory.')
         else
           -- If the player was willing to buy at the price his reserve price
           -- should be higher
           handle_price_signal(player_name, item_name, offer.price)
-          local seller = offer.location.name
-          local item = persistent_inventory_try_to_remove_one(seller, item_name)
-          if item then
+          local seller = offer.player_name
+          local success
+          if offer.location.type == 'player' then
+            success = persistent_inventory_try_to_remove_one(seller, item_name)
+          elseif offer.location.type == 'node' then
+            local inv = minetest.get_inventory(offer.location)
+            success = false
+            for list_name, list in pairs(inv:get_lists()) do
+              local item = inv:remove_item(list_name, item_name)
+              if not item:is_empty() then
+                success = true
+              end
+            end
+          else
+            harberger_economy.log('error', "this is impossible")
+          end
+          if success then
             local reason = {type='buy', buyer=player_name, seller=seller, item_stack=item_name, offer=offer}
             local pay = harberger_economy.pay(player_name, seller, offer.price, reason, false)
             if not pay then
@@ -547,9 +586,7 @@ function harberger_economy.get_tax_per_item(player_name)
         local total_tax = 0
         local count = 0
         for i, offer in ipairs(offer_list) do
-          if offer.location.type ~= 'player' then
-            harberger_economy.log("error", 'Non player inventories not supported and will not correctly be taxed')
-          elseif offer.location.name == player_name then
+          if offer.player_name == player_name then
             count = count + offer.count
             total_tax = total_tax + offer.price * offer.count * tax_rate
           end
