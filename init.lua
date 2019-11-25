@@ -117,7 +117,7 @@ function harberger_economy.get_storage()
     else
       -- TODO deserialization takes about 5ms on a small world which is too slow to run every tick
       local data_with_schema = minetest.deserialize(data_string)
-      if data_with_schema.schema ~= current_schema then
+      if not data_with_schema or data_with_schema.schema ~= current_schema then
         cached_storage = default_data
       else
         cached_storage = data_with_schema.data
