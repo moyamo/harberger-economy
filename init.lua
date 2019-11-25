@@ -1042,6 +1042,41 @@ minetest.register_on_player_receive_fields(
 
 -- BEGIN Useful functions
 
+local function hide_formspec(pos)
+  -- When a user right-clicks on a node with a formspec meta, a form is openned
+  -- directly from C++ without going through lua. We need to override this to
+  -- add protection on property. So we just hide the formspec meta and show it
+  -- manually on all owned blocks.
+  -- Currently bones have a formspec meta and chests do not have a formspec meta
+  local meta = minetest.get_meta(pos)
+  local old_formspec = meta:get("formspec")
+  if old_formspec then
+    meta:set_string("harberger_economy:formspec", old_formspec)
+    meta:set_string("formspec", "")
+  end
+end
+
+minetest.register_node("harberger_economy:test_hide_formspec", {
+    description = "Test Hide formspec",
+    groups = {oddly_breakable_by_hand=2},
+    on_construct = function(pos)
+        local meta = minetest.get_meta(pos)
+        meta:set_string("formspec",
+                "size[8,9]"..
+                "list[current_name;main;0,0;8,4;]"..
+                "list[current_player;main;0,5;8,4;]" ..
+                "listring[]")
+        meta:set_string("infotext", "Test Hide formspec")
+        local inv = meta:get_inventory()
+        inv:set_size("main", 8*4)
+    end,
+    on_receive_fields = function(pos, formname, fields, sender)
+      local sender = sender and sender:get_player_name()
+      print("YO " .. dump(pos) .. " " .. dump(formname) .. " " .. dump(fields) .. " " .. dump(sender))
+    end
+})
+
+
 function initialize_reserve_price(player_name, item_name)
   local price = harberger_economy.get_default_price(item_name)
   minetest.chat_send_player(
@@ -1498,6 +1533,7 @@ minetest.register_on_placenode(
     if placer:is_player() then
       local player_name = placer:get_player_name()
       harberger_economy.claim_node(player_name, pos)
+      hide_formspec(pos)
     end
   end
 )
@@ -1511,6 +1547,63 @@ function minetest.is_protected(pos, player_name)
   end
   return old_protected(pos, player_name)
 end
+
+local function call_on_rightclick(itemstack, placer, pointed_thing, param2)
+  if (pointed_thing.type == "node" and placer and
+      not placer:get_player_control().sneak) then
+    local n = minetest.get_node(pointed_thing.under)
+    local nn = n.name
+    if minetest.registered_nodes[nn] and minetest.registered_nodes[nn].on_rightclick then
+      return (minetest.registered_nodes[nn]
+                .on_rightclick(pointed_thing.under, n, placer, itemstack, pointed_thing)
+                or itemstack), false
+        end
+    end
+
+end
+
+local hide_formspec_prefix = 'haraberger_economy:hide_form_spec:'
+
+local old_item_place = minetest.item_place
+function minetest.item_place(itemstack, placer, pointed_thing, param2)
+  -- Try to mimic the behaviour of game.cpp:handlePointingAtNode:TheRightClickBranch
+  if pointed_thing and pointed_thing.under then
+    local pos = pointed_thing.under
+    local meta = minetest.get_meta(pos)
+    local node_name = minetest.get_node(pos).name
+    local formspec = meta:get("harberger_economy:formspec")
+    local player_name = placer and placer:get_player_name()
+    if formspec and player_name then
+      -- Replace 'context' with absolute position
+      local node_inv = 'nodemeta:' .. pos.x .. ',' .. pos.y .. ',' .. pos.z .. ';'
+      formspec = formspec
+        :gsub('list%[context;', 'list%[' .. node_inv)
+        :gsub('list%[current_name;', 'list%[' .. node_inv)
+        :gsub('listring%[context;', 'listring%[' .. node_inv)
+        :gsub('listring%[current_name;', 'listring%[' .. node_inv)
+      local form_name = hide_formspec_prefix
+        .. node_name
+        .. ":$%$:" .. minetest.pos_to_string(pos)
+      minetest.show_formspec(player_name, form_name, formspec)
+      return call_on_rightclick(itemstack, placer, pointed_thing, param2)
+    end
+  end
+  return old_item_place(itemstack, placer, pointed_thing, param2)
+end
+
+minetest.register_on_player_receive_fields(
+  function (player, form_name, fields)
+    if form_name:sub(1, #hide_formspec_prefix) == hide_formspec_prefix then
+      local info = form_name:sub(#hide_formspec_prefix + 1, #form_name)
+      local node_name, pos_string = unpack(string.split(info, ":$%$:"))
+      local node_spec = minetest.registered_nodes[node_name]
+      if node_spec and node_spec.on_receive_fields then
+        local pos = minetest.string_to_pos(pos_string)
+        node_spec.on_receive_fields(pos, "", fields, player)
+      end
+    end
+  end
+)
 
 
 
