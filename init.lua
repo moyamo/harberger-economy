@@ -109,10 +109,13 @@ local default_data = {
   },
   region_to_owner = {
   },
-  last_region = 0
+  last_region = 0,
+  claim_on_place = {
+    -- Setting for whether nodes should be claimed when placed
+  },
 }
 
-local current_schema = '14'
+local current_schema = '15'
 local cached_storage = nil
 local batch_storage = 0
 -- TODO I think it should be fine to only save_storage at intervals and on server exit
@@ -191,6 +194,7 @@ function harberger_economy.initialize_player(player)
         storage.balances[player_name] = harberger_economy.config.starting_income
         storage.transactions[player_name] = {}
         storage.inventory_change_list[player_name] = {}
+        storage.claim_on_place[player_name] = true
       end
   end)
 end
@@ -1116,6 +1120,23 @@ function harberger_economy.get_owned_pos()
   )
 end
 
+function harberger_economy.get_claim_on_place(player_name)
+  return harberger_economy.with_storage(
+    function(storage)
+      return storage.claim_on_place[player_name]
+    end
+  )
+end
+
+function harberger_economy.set_claim_on_place(player_name, claim_on_place)
+  return harberger_economy.with_storage(
+    function(storage)
+      storage.claim_on_place[player_name] = claim_on_place
+    end
+  )
+end
+
+
 -- END other api
 
 
@@ -1150,7 +1171,7 @@ minetest.register_node("harberger_economy:test_hide_formspec", {
         inv:set_size("main", 8*4)
     end,
     on_receive_fields = function(pos, formname, fields, sender)
-      local sender = sender and sender:get_player_name()
+      sender = sender and sender:get_player_name()
       print("YO " .. dump(pos) .. " " .. dump(formname) .. " " .. dump(fields) .. " " .. dump(sender))
     end
 })
@@ -1566,6 +1587,27 @@ minetest.register_chatcommand(
   }
 )
 
+minetest.register_chatcommand(
+  'harberger_economy:claim_on_place',
+  {
+    params = '(true|false)',
+    description = 'Price items',
+    privs = {},
+    func = function (player_name, params)
+      if params == 'true' then
+        harberger_economy.set_claim_on_place(player_name, true)
+        return true, "You will own all the future nodes you place"
+      elseif params == 'false' then
+        harberger_economy.set_claim_on_place(player_name, false)
+        return true, "You will NOT own all the future nodes you place"
+      else
+        return false, "Please specify 'true' or 'false' as an argument"
+      end
+    end
+  }
+)
+
+
 local update_timediff = harberger_economy.config.update_delay
 minetest.register_globalstep(
   function (dtime)
@@ -1588,6 +1630,7 @@ if sfinv then
   sfinv.register_page("harberger_economy:inventory", {
     title = "Economy",
     get = function(self, player, context)
+      local claim_on_place = tostring(harberger_economy.get_claim_on_place(player:get_player_name()))
       return sfinv.make_formspec(
         player,
         context,
@@ -1596,6 +1639,7 @@ if sfinv then
           .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
           .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
           .. "button[4.1,2.1;2,1;item_quantity;Item Quantity]"
+          .. "checkbox[0.1,3.1;claim_on_place;Claim on place;" .. claim_on_place .. "]"
         ,
         false
       )
@@ -1613,6 +1657,10 @@ if sfinv then
         harberger_economy.show_tax_form(player_name, 'rate')
       elseif fields.item_quantity then
         harberger_economy.show_tax_form(player_name, 'quantity')
+      elseif fields.claim_on_place then
+        harberger_economy.set_claim_on_place(player_name, fields.claim_on_place == 'true')
+        -- Update the formspec so that when we reopen it the correct default value is shown
+        sfinv.set_page(player, "harberger_economy:inventory")
       end
     end,
   })
@@ -1622,7 +1670,9 @@ minetest.register_on_placenode(
   function (pos, newnode, placer, oldnode, itemstack, pointed_thing)
     if placer:is_player() then
       local player_name = placer:get_player_name()
-      harberger_economy.claim_node(player_name, pos)
+      if harberger_economy.get_claim_on_place(player_name) then
+        harberger_economy.claim_node(player_name, pos)
+      end
       hide_formspec(pos)
     end
   end
