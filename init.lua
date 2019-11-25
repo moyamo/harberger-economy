@@ -761,6 +761,14 @@ function harberger_economy.claim_node(player_name, pos)
   )
 end
 
+function harberger_economy.disown_node(pos)
+    return harberger_economy.with_storage(
+    function (storage)
+      harberger_economy.set_region(pos, nil)
+    end
+  )
+end
+
 -- END public storage api
 
 -- BEGIN Persistent Inventory api
@@ -1617,6 +1625,12 @@ minetest.register_on_placenode(
       harberger_economy.claim_node(player_name, pos)
       hide_formspec(pos)
     end
+  end
+)
+
+minetest.register_on_dignode(
+  function (pos, oldnode, digger)
+    harberger_economy.disown_node(pos)
   end
 )
 
