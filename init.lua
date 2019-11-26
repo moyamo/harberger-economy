@@ -335,9 +335,11 @@ function harberger_economy.reason_to_string(reason)
       elseif reason.type == 'buy' then
         return 'Bought ' .. reason.item_stack
       elseif reason.type == 'harberger_tax' then
-        return 'Harberger tax'
+        return 'Tax'
       elseif reason.type == 'bankruptcy' then
         return 'Bankruptcy'
+      elseif reason.type == 'buy_region' then
+        return 'Bought ' .. reason.region
       end
   end
   harberger_economy.log('warn', 'Reason for payment' .. dump(reason) .. ' is unknown.')
@@ -949,6 +951,37 @@ function harberger_economy.set_region_price(region, price)
   )
 end
 
+function harberger_economy.set_region_owner(region, owner)
+  return harberger_economy.with_storage(
+    function (storage)
+      if storage.initialized_players[owner] then
+        storage.region_to_owner[region] = owner
+      end
+    end
+  )
+end
+
+function harberger_economy.buy_region(player_name, region)
+  return harberger_economy.with_storage(
+    function (storage)
+      local seller = harberger_economy.get_owner_of_region(region)
+      local price = harberger_economy.get_region_price(region)
+      if not seller or seller == player_name then
+        return false -- Don't buy from yourself or null
+      end
+      local reason = {type='buy_region', buyer=player_name, seller=seller, region=region}
+      local pay = harberger_economy.pay(player_name, seller, price, reason, false)
+      if not pay then
+        local error_string =  tostring(player_name) .. " cannot buy " .. tostring(region) .. ". Not enough funds."
+        harberger_economy.log_chat('warning', error_string, {player_name})
+        return false
+      else
+        harberger_economy.set_region_owner(region, player_name)
+        return true
+      end
+    end
+  )
+end
 
 -- END public storage api
 
@@ -1307,7 +1340,6 @@ function harberger_economy.show_region_price_form(player_name)
     )
   end
   form_spec = table.concat(form_spec)
-  print(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
 
@@ -1333,6 +1365,39 @@ minetest.register_on_player_receive_fields(
     end
   end
 )
+
+function harberger_economy.show_buy_region_form(player_name, pos)
+  local form_name = 'harberger_economy:buy_region_form'
+  local region = harberger_economy.get_region(pos)
+  local price = harberger_economy.get_region_price(region)
+  local form_spec = {
+    'size[4,2]',
+    'button_exit[0,0;4,1;buy:', region, ';Buy region ', region, ' for ', price, ']',
+    'button_exit[0,1;4,1;cancel;Cancel]'
+  }
+  form_spec = table.concat(form_spec)
+  minetest.show_formspec(player_name, form_name, form_spec)
+end
+
+-- Receive buy region form
+minetest.register_on_player_receive_fields(
+  function(player, form_name, fields)
+    if form_name ~= 'harberger_economy:buy_region_form' then
+      return false
+    end
+    local player_name = player:get_player_name()
+    local prefix = "buy:"
+    for k,v in pairs(fields) do
+      if k:sub(1, #prefix) == prefix then
+        local region = tonumber(k:sub(#prefix + 1, #k))
+        if harberger_economy.is_region(region) then
+          harberger_economy.buy_region(player_name, region)
+        end
+      end
+    end
+  end
+)
+
 
 function harberger_economy.get_owned_pos(player_name)
   return harberger_economy.with_storage(
@@ -1990,6 +2055,7 @@ minetest.register_on_protection_violation(
         .. " in region " .. region
         .. " owned by " .. owner
       harberger_economy.log_chat("warning", message, inform_players)
+      harberger_economy.show_buy_region_form(player_name, pos)
     end
   end
 )
