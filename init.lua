@@ -498,6 +498,15 @@ function harberger_economy.reposses_assets(player_name)
       persistent_inventory_try_to_remove_one(player_name, item:to_string())
     end
   end
+  local owned_pos = harberger_economy.get_owned_pos(player_name)
+  for i, pos in ipairs(owned_pos) do
+    harberger_economy.set_region(pos, nil)
+    minetest.remove_node(pos)
+  end
+  local owned_regions = harberger_economy.get_owned_regions(player_name)
+  for i, region in ipairs(owned_regions) do
+    harberger_economy.delete_region(region)
+  end
 end
 
 local function on_successful_buy(item_name)
@@ -705,6 +714,9 @@ function harberger_economy.get_wealth(player_name)
   for item_name, tax_entry in pairs(tax_per_item) do
     wealth = wealth + tax_entry.average_price * tax_entry.count
   end
+  for i, region in pairs(harberger_economy.get_owned_regions(player_name)) do
+    wealth = wealth + harberger_economy.get_region_price(region)
+  end
   return wealth
 end
 
@@ -831,9 +843,8 @@ function harberger_economy.merge_region(large, small)
           end
         end
       end
-      storage.region_to_owner[small] = nil
       harberger_economy.increase_region_price(large, storage.region_to_price[small])
-      storage.region_to_price[small] = nil
+      harberger_economy.delete_region(small)
     end
   )
 end
@@ -847,6 +858,16 @@ function harberger_economy.new_region(new_owner)
       storage.region_to_price[my_region] = 0
       storage.region_node_count[my_region] = {}
       return my_region
+    end
+  )
+end
+
+function harberger_economy.delete_region(region)
+   return harberger_economy.with_storage(
+    function (storage)
+      storage.region_to_owner[region] = nil
+      storage.region_to_price[region] = nil
+      storage.region_node_count[region] = nil
     end
   )
 end
@@ -885,16 +906,16 @@ function harberger_economy.disown_node(pos, node)
       local player_name = harberger_economy.get_owner_of_pos(pos)
       if player_name then
         local region = harberger_economy.get_region(pos)
-        local offer = {price=0}
         if node and node.name then
+          local offer = {price=0}
           offer = harberger_economy.get_reserve_offer(player_name, node.name) or offer
+          harberger_economy.increase_region_price(region, -offer.price)
+          local rnc = storage.region_node_count[region]
+          rnc[node.name] = rnc[node.name] or 1
+          rnc[node.name] = rnc[node.name] - 1
         end
-        harberger_economy.increase_region_price(region, -offer.price)
-        local rnc = storage.region_node_count[region]
-        rnc[node.name] = rnc[node.name] or 1
-        rnc[node.name] = rnc[node.name] - 1
-        harberger_economy.set_region(pos, nil)
       end
+      harberger_economy.set_region(pos, nil)
     end
   )
 end
@@ -1308,14 +1329,14 @@ minetest.register_on_player_receive_fields(
   end
 )
 
-function harberger_economy.get_owned_pos()
+function harberger_economy.get_owned_pos(player_name)
   return harberger_economy.with_storage(
     function (storage)
       local list = {}
       for x, a in pairs(storage.pos_to_region) do
         for y, b in pairs(a) do
           for z, region in pairs(b) do
-            if region then
+            if region and (not player_name or storage.region_to_owner[region] == player_name) then
               table.insert(list, {x=x, y=y, z=z})
             end
           end
