@@ -236,6 +236,19 @@ function harberger_economy.is_item(item_name)
   return minetest.registered_items[item_name] and item_name ~= ''
 end
 
+function harberger_economy.is_region(region)
+  return harberger_economy.with_storage(
+    function (storage)
+      if storage.region_to_owner[region] then
+        return true
+      else
+        return false
+      end
+    end
+  )
+end
+
+
 function harberger_economy.get_time_since_last_payement()
   return harberger_economy.with_storage(
     function (storage)
@@ -808,6 +821,15 @@ function harberger_economy.disown_node(pos, node)
   )
 end
 
+function harberger_economy.get_region_price(region)
+  return harberger_economy.with_storage(
+    function (storage)
+      return storage.region_to_price[region]
+    end
+  )
+end
+
+
 function harberger_economy.increase_region_price(region, incr)
   return harberger_economy.with_storage(
     function (storage)
@@ -1155,6 +1177,56 @@ minetest.register_on_player_receive_fields(
       return true
     end
     return true
+  end
+)
+
+function harberger_economy.show_region_price_form(player_name)
+  local form_name = 'harberger_economy:region_price_form'
+  local regions = harberger_economy.get_owned_regions(player_name)
+  local region_render = {}
+  for i, region in ipairs(regions) do
+    local price = harberger_economy.get_region_price(region)
+    table.insert(region_render, {region=region, price=price})
+  end
+  table.sort(region_render, function (a, b) return a.region < b.region end)
+  local columns = 8
+  local rows = #region_render
+  local form_spec = {'size[', columns, ',', rows, ']'}
+  for i, line in pairs(region_render) do
+    local c = 0
+    local r = (i - 1)
+    table.insert_all(
+      form_spec,
+      {
+        'field[', 0.2 + c, ',', r, ';3,2;', 'region_price:', line.region, ';Region ', line.region, ' Price;', line.price, ']',
+        'button[', c + 3, ',', r + 0.15, ';2,1;', 'update:', line.region, ';Update]'
+      }
+    )
+  end
+  form_spec = table.concat(form_spec)
+  print(form_spec)
+  minetest.show_formspec(player_name, form_name, form_spec)
+end
+
+-- Receive price form
+minetest.register_on_player_receive_fields(
+  function(player, form_name, fields)
+    if form_name ~= 'harberger_economy:region_price_form' then
+      return false
+    end
+    local player_name = player:get_player_name()
+    local prefix = "update:"
+    for k,v in pairs(fields) do
+      if k:sub(1, #prefix) == prefix then
+        local region = tonumber(k:sub(#prefix + 1, #k))
+        if harberger_economy.is_region(region) then
+          local price = tonumber(fields['region_price:' .. region])
+          if price and price > 0 then
+            harberger_economy.set_region_price(region, price)
+          end
+        end
+      end
+    end
   end
 )
 
@@ -1660,6 +1732,29 @@ minetest.register_chatcommand(
 )
 
 minetest.register_chatcommand(
+  'harberger_economy:region_price',
+  {
+    params = '[region] [price]',
+    description = 'Price regions',
+    privs = {},
+    func = function (player_name, params)
+      params = string.split(params, ' ')
+      local region = params[1]
+      if harberger_economy.is_region(region) then
+        region = nil
+      end
+      local price = tonumber(params[2])
+      if price and region then
+        harberger_economy.set_region_price(region, price)
+      else
+        harberger_economy.show_region_price_form(player_name)
+      end
+    end
+  }
+)
+
+
+minetest.register_chatcommand(
   'harberger_economy:claim_on_place',
   {
     params = '(true|false)',
@@ -1708,6 +1803,7 @@ if sfinv then
         context,
         "button[0.1,0.1;2,1;buy;Buy]"
           .. "button[0.1,1.1;2,1;price;Price]"
+          .. "button[2.1,1.1;2,1;region_price;Region Price]"
           .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
           .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
           .. "button[4.1,2.1;2,1;item_quantity;Item Quantity]"
@@ -1723,6 +1819,8 @@ if sfinv then
         harberger_economy.show_buy_form(player_name)
       elseif fields.price then
         harberger_economy.show_price_form(player_name)
+      elseif fields.region_price then
+        harberger_economy.show_region_price_form(player_name)
       elseif fields.tax_amount then
         harberger_economy.show_tax_form(player_name, 'amount')
       elseif fields.tax_rate then
