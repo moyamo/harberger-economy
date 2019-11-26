@@ -109,13 +109,15 @@ local default_data = {
   },
   region_to_owner = {
   },
+  region_to_price = {
+  },
   last_region = 0,
   claim_on_place = {
     -- Setting for whether nodes should be claimed when placed
   },
 }
 
-local current_schema = '15'
+local current_schema = '16'
 local cached_storage = nil
 local batch_storage = 0
 -- TODO I think it should be fine to only save_storage at intervals and on server exit
@@ -690,6 +692,18 @@ function harberger_economy.set_region(pos, region)
   )
 end
 
+function harberger_economy.add_node_to_region(pos, region, node)
+  return harberger_economy.with_storage(
+    function (storage)
+      harberger_economy.set_region(pos, region)
+      local player_name = harberger_economy.get_owner_of_region(region)
+      local node_offer = harberger_economy.get_reserve_offer(player_name, node.name) or {price=0}
+      harberger_economy.increase_region_price(region, node_offer.price)
+    end
+  )
+end
+
+
 
 function harberger_economy.surrounding_regions(pos)
   return harberger_economy.with_storage(
@@ -731,11 +745,25 @@ function harberger_economy.merge_region(large, small)
         end
       end
       storage.region_to_owner[small] = nil
+      harberger_economy.increase_region_price(large, storage.region_to_price[small])
+      storage.region_to_price[small] = nil
     end
   )
 end
 
-function harberger_economy.claim_node(player_name, pos)
+function harberger_economy.new_region(new_owner)
+  return harberger_economy.with_storage(
+    function (storage)
+      local my_region = storage.last_region + 1
+      storage.last_region = my_region
+      storage.region_to_owner[my_region] = new_owner
+      storage.region_to_price[my_region] = 0
+      return my_region
+    end
+  )
+end
+
+function harberger_economy.claim_node(player_name, pos, node)
   return harberger_economy.with_storage(
     function (storage)
       local surrounding = harberger_economy.surrounding_regions(pos)
@@ -745,33 +773,61 @@ function harberger_economy.claim_node(player_name, pos)
           table.insert(my_surrounding, region)
         end
       end
+      local region
       if #my_surrounding == 0 then
-        local my_region = storage.last_region + 1
-        storage.last_region = my_region
-        storage.region_to_owner[my_region] = player_name
-        harberger_economy.set_region(pos, my_region)
-      elseif  #my_surrounding == 1 then
-        harberger_economy.set_region(pos, my_surrounding[1])
+        region = harberger_economy.new_region(player_name)
+      elseif #my_surrounding == 1 then
+        region = my_surrounding[1]
       else
-        local my_region = my_surrounding[1]
-        for i, region in ipairs(my_surrounding) do
+        region = my_surrounding[1]
+        for i, r in ipairs(my_surrounding) do
           if i ~= 1 then
-            harberger_economy.merge_region(my_region, region)
+            harberger_economy.merge_region(region, r)
           end
         end
-        harberger_economy.set_region(pos, my_region)
       end
+      harberger_economy.add_node_to_region(pos, region, node)
     end
   )
 end
 
-function harberger_economy.disown_node(pos)
-    return harberger_economy.with_storage(
+function harberger_economy.disown_node(pos, node)
+  return harberger_economy.with_storage(
     function (storage)
+      local player_name = harberger_economy.get_owner_of_pos(pos)
+      if player_name then
+        local region = harberger_economy.get_region(pos)
+        local offer = {price=0}
+        if node and node.name then
+          offer = harberger_economy.get_reserve_offer(player_name, node.name) or offer
+        end
+        harberger_economy.increase_region_price(region, -offer.price)
+      end
       harberger_economy.set_region(pos, nil)
     end
   )
 end
+
+function harberger_economy.increase_region_price(region, incr)
+  return harberger_economy.with_storage(
+    function (storage)
+      local new_price = storage.region_to_price[region] + incr
+      new_price = math.max(0, new_price)
+      storage.region_to_price[region] = new_price
+    end
+  )
+end
+
+function harberger_economy.set_region_price(region, price)
+  return harberger_economy.with_storage(
+    function (storage)
+      local new_price = price
+      new_price = math.max(0, new_price)
+      storage.region_to_price[region] = new_price
+    end
+  )
+end
+
 
 -- END public storage api
 
@@ -1120,6 +1176,20 @@ function harberger_economy.get_owned_pos()
   )
 end
 
+function harberger_economy.get_owned_regions(player_name)
+   return harberger_economy.with_storage(
+     function (storage)
+       local list = {}
+       for region, p in pairs(storage.region_to_owner) do
+         if p == player_name then
+           table.insert(list, region)
+         end
+       end
+       return list
+     end
+   )
+end
+
 function harberger_economy.get_claim_on_place(player_name)
   return harberger_economy.with_storage(
     function(storage)
@@ -1179,15 +1249,17 @@ minetest.register_node("harberger_economy:test_hide_formspec", {
 
 function initialize_reserve_price(player_name, item_name)
   local price = harberger_economy.get_default_price(item_name)
-  minetest.chat_send_player(
-    player_name,
-    "You have not set a reserve price for "
-      .. item_name .. " setting it to " .. price)
-  harberger_economy.log(
-    'action',
-    player_name .. " has not set a reserve price for "
-      .. item_name .. " setting it to " .. price)
-  harberger_economy.set_reserve_price(player_name, item_name, price)
+  if harberger_economy.is_item(item_name) then
+    minetest.chat_send_player(
+      player_name,
+      "You have not set a reserve price for "
+        .. item_name .. " setting it to " .. price)
+    harberger_economy.log(
+      'action',
+      player_name .. " has not set a reserve price for "
+        .. item_name .. " setting it to " .. price)
+    harberger_economy.set_reserve_price(player_name, item_name, price)
+  end
   return price
 end
 
@@ -1671,7 +1743,8 @@ minetest.register_on_placenode(
     if placer:is_player() then
       local player_name = placer:get_player_name()
       if harberger_economy.get_claim_on_place(player_name) then
-        harberger_economy.claim_node(player_name, pos)
+        harberger_economy.disown_node(pos, oldnode)
+        harberger_economy.claim_node(player_name, pos, newnode)
       end
       hide_formspec(pos)
     end
@@ -1680,7 +1753,7 @@ minetest.register_on_placenode(
 
 minetest.register_on_dignode(
   function (pos, oldnode, digger)
-    harberger_economy.disown_node(pos)
+    harberger_economy.disown_node(pos, oldnode)
   end
 )
 
