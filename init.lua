@@ -1281,14 +1281,16 @@ minetest.register_on_player_receive_fields(
 
 function harberger_economy.show_region_price_form(player_name)
   local form_name = 'harberger_economy:region_price_form'
-  local regions = harberger_economy.get_owned_regions(player_name)
+  local tax_regions = harberger_economy.get_tax_per_region(player_name)
   local region_render = {}
-  for i, region in ipairs(regions) do
-    local price = harberger_economy.get_region_price(region)
-    table.insert(region_render, {region=region, price=price})
+  for region, tax in pairs(tax_regions) do
+    local price = tax.price
+    local tax_rate = string.format("%.2f", tax.tax_rate * 100) .. '%'
+    local total_tax = harberger_economy.round(tax.total_tax)
+    table.insert(region_render, {region=region, price=price, tax_rate=tax_rate, total_tax=total_tax})
   end
   table.sort(region_render, function (a, b) return a.region < b.region end)
-  local columns = 8
+  local columns = 9
   local rows = #region_render
   local form_spec = {'size[', columns, ',', rows, ']'}
   for i, line in pairs(region_render) do
@@ -1298,7 +1300,9 @@ function harberger_economy.show_region_price_form(player_name)
       form_spec,
       {
         'field[', 0.2 + c, ',', r, ';3,2;', 'region_price:', line.region, ';Region ', line.region, ' Price;', line.price, ']',
-        'button[', c + 3, ',', r + 0.15, ';2,1;', 'update:', line.region, ';Update]'
+        'button[', c + 3, ',', r + 0.15, ';2,1;', 'update:', line.region, ';Update]',
+        'label[', c + 5, ',', r + 0.35, ';Tax rate: ', line.tax_rate, ']',
+        'label[', c + 7, ',', r + 0.35, ';Tax total: ', line.total_tax, ']',
       }
     )
   end
@@ -1322,6 +1326,7 @@ minetest.register_on_player_receive_fields(
           local price = tonumber(fields['region_price:' .. region])
           if price and price > 0 then
             harberger_economy.set_region_price(region, price)
+            harberger_economy.show_region_price_form(player_name)
           end
         end
       end
