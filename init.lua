@@ -1646,6 +1646,11 @@ local function do_auction()
         local new_price = harberger_economy.round(offer.price * rate)
         harberger_economy.set_reserve_price(player_name, item_name, new_price)
       end
+      for j, region in ipairs(harberger_economy.get_owned_regions(player_name)) do
+        local old_price = harberger_economy.get_region_price(region)
+        local new_price = harberger_economy.round(old_price * rate)
+        harberger_economy.set_region_price(region, new_price)
+      end
     end
   end
 end
