@@ -195,7 +195,7 @@ function harberger_economy.initialize_player(player)
         storage.offers[player_name] = {}
         storage.reserve_offers[player_name] = {}
         storage.initialized_players[player_name] = true
-        storage.balances[player_name] = harberger_economy.config.starting_income
+        storage.balances[player_name] = 0
         storage.transactions[player_name] = {}
         storage.inventory_change_list[player_name] = {}
         storage.claim_on_place[player_name] = true
