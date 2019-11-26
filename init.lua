@@ -302,7 +302,10 @@ function harberger_economy.get_default_price(item_name)
     When a player gets a new item if there is no reserve price
     1. Set the reserve price to current selling price
     2. If there is no selling price then set it to game_time / days * daily_price_basket
-    (i.e. it took this much game time to get so it's probably worth that)
+       (i.e. it took this much game time to get so it's probably worth that)
+    3. However if the item is more expensive than 1 day
+       set the price to no more than 2 twice the most expensive item
+       to prevent items so expensive it immediately bankrupts a player
   --]]
   local cheapest_offers = harberger_economy.get_cheapest_offers()
   if cheapest_offers[item_name] then
@@ -311,7 +314,15 @@ function harberger_economy.get_default_price(item_name)
       local price_index = harberger_economy.config.price_index
       local time = minetest.get_gametime()
       local time_speed =  TIME_SPEED
-      return harberger_economy.round(price_index * time * time_speed / DAY_SECONDS)
+      local time_is_money = price_index * time * time_speed / DAY_SECONDS
+      local price = time_is_money
+      if time_is_money > price_index then
+        local most_expensive = harberger_economy.get_most_expensive_offer()
+        if most_expensive and most_expensive.price > 0 then
+          price = math.min(price, most_expensive.price * 2)
+        end
+      end
+      return harberger_economy.round(price)
   end
 end
 
@@ -463,6 +474,19 @@ function harberger_economy.get_cheapest_offers(buying_player_name)
     end
   end
   return cheapest_offers
+end
+
+function harberger_economy.get_most_expensive_offer()
+  local offers = harberger_economy.get_offers()
+  local expensive_offer = {price=0}
+  for item_name, offer_list in pairs(offers) do
+    for i, offer in ipairs(offer_list) do
+      if expensive_offer.price < offer.price then
+        expensive_offer = offer
+      end
+    end
+  end
+  return expensive_offer
 end
 
 function harberger_economy.reposses_assets(player_name)
