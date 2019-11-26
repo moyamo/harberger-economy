@@ -111,13 +111,15 @@ local default_data = {
   },
   region_to_price = {
   },
+  region_node_count = {
+  },
   last_region = 0,
   claim_on_place = {
     -- Setting for whether nodes should be claimed when placed
   },
 }
 
-local current_schema = '16'
+local current_schema = '17'
 local cached_storage = nil
 local batch_storage = 0
 -- TODO I think it should be fine to only save_storage at intervals and on server exit
@@ -619,6 +621,27 @@ function harberger_economy.get_tax_rate_bp(item_name)
   )
 end
 
+-- Returns the tax rate in basis points (1/10000ths or 1/100 of a percent)
+-- Weighted average of tax of all items multiplied by log2 of number of items + 1
+function harberger_economy.get_tax_rate_region_bp(region)
+  return harberger_economy.with_storage(
+    function (storage)
+      local total = 0
+      local tax_rate = 0
+      for item_name, count in pairs(storage.region_node_count[region]) do
+        total = total + count
+        local item_tax = harberger_economy.get_tax_rate_bp(item_name)
+        tax_rate = tax_rate + count * item_tax
+      end
+      tax_rate = tax_rate / total
+      local size_multiplier = 1 + math.log(total) / math.log(2)
+      tax_rate = size_multiplier * tax_rate
+      return harberger_economy.round(tax_rate)
+    end
+  )
+end
+
+
 function harberger_economy.get_tax_per_item(player_name)
   return harberger_economy.batch_storage(
     function()
@@ -645,10 +668,32 @@ function harberger_economy.get_tax_per_item(player_name)
   )
 end
 
+function harberger_economy.get_tax_per_region(player_name)
+  return harberger_economy.batch_storage(
+    function()
+      local regions = harberger_economy.get_owned_regions(player_name)
+      local tax = {}
+      for i, region in ipairs(regions) do
+        local tax_rate =  harberger_economy.get_tax_rate_region_bp(region) / 10000
+        local price = harberger_economy.get_region_price(region)
+        local total_tax = price * tax_rate
+        if total_tax > 0 then
+          tax[region] = {tax_rate=tax_rate, total_tax=total_tax, price=price}
+        end
+      end
+      return tax
+    end
+  )
+end
+
 function harberger_economy.get_tax_owed(player_name)
   local tax_per_item = harberger_economy.get_tax_per_item(player_name)
   local tax = 0
   for item_name, tax_entry in pairs(tax_per_item) do
+    tax = tax + tax_entry.total_tax
+  end
+  local tax_per_region = harberger_economy.get_tax_per_region(player_name)
+  for region, tax_entry in pairs(tax_per_region) do
     tax = tax + tax_entry.total_tax
   end
   return tax
@@ -734,8 +779,13 @@ function harberger_economy.add_node_to_region(pos, region, node)
     function (storage)
       harberger_economy.set_region(pos, region)
       local player_name = harberger_economy.get_owner_of_region(region)
-      local node_offer = harberger_economy.get_reserve_offer(player_name, node.name) or {price=0}
-      harberger_economy.increase_region_price(region, node_offer.price)
+      if node and node.name then
+        local node_offer = harberger_economy.get_reserve_offer(player_name, node.name) or {price=0}
+        harberger_economy.increase_region_price(region, node_offer.price)
+        local rnc = storage.region_node_count[region]
+        rnc[node.name] = rnc[node.name] or 0
+        rnc[node.name] = rnc[node.name] + 1
+      end
     end
   )
 end
@@ -795,6 +845,7 @@ function harberger_economy.new_region(new_owner)
       storage.last_region = my_region
       storage.region_to_owner[my_region] = new_owner
       storage.region_to_price[my_region] = 0
+      storage.region_node_count[my_region] = {}
       return my_region
     end
   )
@@ -839,8 +890,11 @@ function harberger_economy.disown_node(pos, node)
           offer = harberger_economy.get_reserve_offer(player_name, node.name) or offer
         end
         harberger_economy.increase_region_price(region, -offer.price)
+        local rnc = storage.region_node_count[region]
+        rnc[node.name] = rnc[node.name] or 1
+        rnc[node.name] = rnc[node.name] - 1
+        harberger_economy.set_region(pos, nil)
       end
-      harberger_economy.set_region(pos, nil)
     end
   )
 end
