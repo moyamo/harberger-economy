@@ -1676,6 +1676,7 @@ local function do_inflation_targeting(charges)
   end
   local current_supply =
     -harberger_economy.get_balance(harberger_economy.the_bank)
+    + charges -- We already did the charges so add it to the current supply
   local target_price = harberger_economy.config.price_index
   local target_supply = current_supply * target_price / basket_price
   -- Prevent rapid hyper-inflation
@@ -1686,7 +1687,8 @@ local function do_inflation_targeting(charges)
     days_diff
   )
   target_supply = math.min(target_supply, current_supply * max_ratio)
-  local total_payout = target_supply - current_supply + charges
+  local total_payout = target_supply - current_supply
+    + charges -- We still need to pay the charges back out
   -- We don't remove money for inflation targeting, other than harberger taxes
   -- (maybe we should)
   total_payout = math.max(total_payout, 0)
