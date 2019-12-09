@@ -442,7 +442,7 @@ function harberger_economy.get_offers(buying_player_name)
         local location = {type='node', pos=pos}
         local player_name =  harberger_economy.get_owner_of_pos(pos)
         local inv = minetest.get_inventory(location)
-        if inv then
+        if inv and player_name ~= buying_player_name then
           for list_name, list in pairs(inv:get_lists()) do
             for index, item in ipairs(list) do
               if not item:is_empty() then
