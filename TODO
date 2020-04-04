@@ -29,4 +29,5 @@ Unfreeze account and restore prices as soon as person reaches a positive balance
   fixed tool. I should probably use wear and metadata as keys in the auction
   somehow (or make wear linearly cheaper). Or probably just ignore them because
   it is easier.
- 
+
+Make sure everything is in a namespace (even small utility functions)
