@@ -1200,6 +1200,20 @@ local function get_item_button_pressed(fields)
   return nil
 end
 
+function get_best_dimensions(num_items, max_rows)
+  local min_columns = 8
+  if max_rows == nil then
+    max_rows = 12 -- From trail and error this seems reasonable
+  end
+  if num_items <= max_rows * min_columns then
+    local rows = math.ceil(num_items / min_columns)
+    return rows, min_columns
+  else
+    local columns = math.ceil(num_items/max_rows)
+    return max_rows, columns
+  end
+end
+
 function harberger_economy.show_buy_form(player_name)
   local form_name = 'harberger_economy:buy_form'
   local offers = harberger_economy.get_cheapest_offers(player_name)
@@ -1208,8 +1222,7 @@ function harberger_economy.show_buy_form(player_name)
     table.insert(offer_list, {item=item, label=price})
   end
   table.sort(offer_list, function (a, b) return a.item < b.item end)
-  local columns = 8
-  local rows = math.ceil(#offer_list/columns)
+  local rows, columns = get_best_dimensions(#offer_list)
 
   local form_spec = {'size[', columns, ',', rows, ']'}
   insert_item_table(0, 0, columns, rows, offer_list, form_spec)
@@ -1252,8 +1265,7 @@ function harberger_economy.show_tax_form(player_name, rate_or_amount)
     table.insert(tax_list, {item=item, label=label})
   end
   table.sort(tax_list, function (a, b) return a.item < b.item end)
-  local columns = 8
-  local rows = math.ceil(#tax_list/columns)
+  local rows, columns = get_best_dimensions(#tax_list)
   local form_spec = {'size[', columns, ',', rows, ']'}
   insert_item_table(0, 0, columns, rows, tax_list, form_spec)
   form_spec = table.concat(form_spec)
@@ -1272,8 +1284,7 @@ function harberger_economy.show_price_form(player_name, item_name)
     table.insert(offer_list, {item=item, label=offer.price})
   end
   table.sort(offer_list, function (a, b) return a.item < b.item end)
-  local columns = 8
-  local rows = math.ceil(#offer_list/columns)
+  local rows, columns = get_best_dimensions(#offer_list, 11)
   local form_spec = {'size[', columns, ',', rows + 1, ']'}
   table.insert(form_spec, 'field[0.3,0;3,2;item_name;Item name;')
   table.insert(form_spec, item_name)
