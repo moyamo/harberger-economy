@@ -67,6 +67,10 @@ function harberger_economy.round(n)
   end
 end
 
+local function too_few_players()
+  return #minetest.get_connected_players() < 2
+end
+
 -- END helper methods
 
 -- "name" of the bank
@@ -538,6 +542,10 @@ end
 function harberger_economy.buy(player_name, item_name)
   return harberger_economy.with_storage(
     function (storage)
+      if too_few_players() then
+        harberger_economy.log_chat("warning", "Economy is disabled since too few players are online.", {player_name})
+        return false
+      end
       local player = minetest.get_player_by_name(player_name)
       if not player then
         -- We need player location in case inventory full to drop item. Buying
@@ -963,6 +971,10 @@ end
 function harberger_economy.buy_region(player_name, region)
   return harberger_economy.with_storage(
     function (storage)
+      if too_few_players() then
+        harberger_economy.log_chat('warning', "Economy is disabled since too few players are online", {player_name})
+        return false
+      end
       local seller = harberger_economy.get_owner_of_region(region)
       local price = harberger_economy.get_region_price(region)
       if not seller or seller == player_name then
@@ -1195,7 +1207,7 @@ local function get_item_button_pressed(fields)
   return nil
 end
 
-function get_best_dimensions(num_items, max_rows)
+local function get_best_dimensions(num_items, max_rows)
   local min_columns = 8
   if max_rows == nil then
     max_rows = 12 -- From trail and error this seems reasonable
@@ -1796,14 +1808,17 @@ local function update_function(dtime)
       update_owned_nodes()
       -- Check if we should do payment
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
+
       if storage.time_since_last_payment >= payment_period then
-        do_quantity_integration()
-        local charges = do_charges()
-        if not do_inflation_targeting(charges) then
-          give_basic_income()
+        if not too_few_players() then
+          do_quantity_integration()
+          local charges = do_charges()
+          if not do_inflation_targeting(charges) then
+            give_basic_income()
+          end
+          do_auction()
+          do_bankruptcy()
         end
-        do_auction()
-        do_bankruptcy()
         storage.time_since_last_payment = 0
       end
     end
