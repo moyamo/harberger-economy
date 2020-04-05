@@ -31,3 +31,5 @@ Unfreeze account and restore prices as soon as person reaches a positive balance
   it is easier.
 
 Make sure everything is in a namespace (even small utility functions)
+
+* Integrate central message and use that instead of the chat to send player messages

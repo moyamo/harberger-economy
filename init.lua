@@ -566,7 +566,7 @@ function harberger_economy.buy(player_name, item_name)
           local seller = offer.player_name
           local success
           if offer.location.type == 'player' then
-            success = persistent_inventory_try_to_remove_one(seller, item_name)
+            success, removed_from_list = persistent_inventory_try_to_remove_one(seller, item_name)
           elseif offer.location.type == 'node' then
             local inv = minetest.get_inventory(offer.location)
             success = false
@@ -583,14 +583,13 @@ function harberger_economy.buy(player_name, item_name)
             local reason = {type='buy', buyer=player_name, seller=seller, item_stack=item_name, offer=offer}
             local pay = harberger_economy.pay(player_name, seller, offer.price, reason, false)
             if not pay then
-              persistent_inventory_try_to_add_one(seller, item_name)
+              persistent_inventory_try_to_add_one(seller, removed_from_list, item_name)
               local error_string = "Cannot buy " .. tostring(item_name) .. ". Not enough funds."
               minetest.chat_send_player(player_name, error_string)
               harberger_economy.log('warning', tostring(player_name) .. " " .. error_string)
               return false
             else
-              local result = persistent_inventory_try_to_add_one(player_name, item_name)
-
+              local result = persistent_inventory_try_to_add_one(player_name, 'main', item_name)
               if not result then
                 -- TODO reverse this transaction
                 -- We just drop the item as it is convenient
@@ -1128,18 +1127,14 @@ function persistent_inventory_get_items(player_name)
   return lists
 end
 
-function persistent_inventory_try_to_add_one(player_name, item_name)
+function persistent_inventory_try_to_add_one(player_name, list_name, item_name)
   local inventory_name = get_inventory_copy_name(player_name)
   local copy_inv = get_persistent_detached_inventory(inventory_name)
-  for list_name, list in pairs(copy_inv:get_lists()) do
-    if list_name ~= 'craftpreview' then
-      local change = {type='add', list_name=list_name, item_stack=item_name}
-      local result = apply_change_to_inventory(change, copy_inv)
-      add_inventory_change(player_name, change)
-      if result:is_empty() then
-        return true
-      end
-    end
+  local change = {type='add', list_name=list_name, item_stack=item_name}
+  local result = apply_change_to_inventory(change, copy_inv)
+  add_inventory_change(player_name, change)
+  if result:is_empty() then
+    return true
   end
   return false
 end
@@ -1154,11 +1149,11 @@ function persistent_inventory_try_to_remove_one(player_name, item_name)
       local result = apply_change_to_inventory(change, copy_inv)
       add_inventory_change(player_name, change)
       if not result:is_empty() then
-        return true
+        return true, list_name
       end
     end
   end
-  return false
+  return false, nil
 end
 
 -- END Persistent Inventory api
