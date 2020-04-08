@@ -597,6 +597,7 @@ function harberger_economy.buy(player_name, item_name)
           handle_price_signal(player_name, item_name, offer.price)
           local seller = offer.player_name
           local success
+          local removed_from_list
           if offer.location.type == 'player' then
             success, removed_from_list = persistent_inventory_try_to_remove_one(seller, item_name)
           elseif offer.location.type == 'node' then
