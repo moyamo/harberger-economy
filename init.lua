@@ -121,46 +121,68 @@ local default_data = {
   claim_on_place = {
     -- Setting for whether nodes should be claimed when placed
   },
+  chests = {
+    -- key: owner, value: list of nodes that probably have non-empty inventories
+  },
+  pos_to_chest_owner = {
+  },
 }
 
-local current_schema = '19'
+local current_schema = '22'
 local cached_storage = nil
 local batch_storage = 0
 
-
-local function upgrade_schema_from_17(data_with_schema)
-  -- Disable claim on place by default, because it is weird
-  data_with_schema.schema = '18'
-  for p, b in pairs(data_with_schema.data.claim_on_place) do
-    data_with_schema.data.claim_on_place[p] = false
+local schema_upgraders = {
+  ['17'] = function (data_with_schema)
+    -- Disable claim on place by default, because it is weird
+    data_with_schema.schema = '18'
+    for p, b in pairs(data_with_schema.data.claim_on_place) do
+      data_with_schema.data.claim_on_place[p] = false
+    end
+    return data_with_schema
+  end,
+  ['18'] = function (data_with_schema)
+    -- Delete region data because by default it is weird
+    data_with_schema.schema = '19'
+    local data = data_with_schema.data
+    data.region_to_owner = {}
+    data.region_to_price = {}
+    data.region_node_count = {}
+    data.last_region = 0
+    return data_with_schema
+  end,
+  ['19'] = function (data_with_schema)
+    -- Add chests
+    data_with_schema.schema = '20'
+    data_with_schema.data.chests = {}
+    return data_with_schema
+  end,
+  ['20'] = function (data_with_schema)
+    -- add pos_to_chest_owner
+    data_with_schema.schema = '21'
+    data_with_schema.data.pos_to_chest_owner = {}
+    return data_with_schema
+  end,
+  ['21'] = function (data_with_schema)
+    -- initialize player chests
+    data_with_schema.schema = '22'
+    local data = data_with_schema.data
+    for player_name, b in pairs(data.initialized_players) do
+      data.chests[player_name] = {}
+    end
+    return data_with_schema
   end
-  return data_with_schema
-end
-
-local function upgrade_schema_from_18(data_with_schema)
-  -- Delete region data because by default it is weird
-  data_with_schema.schema = '19'
-  local data = data_with_schema.data
-  data.region_to_owner = {}
-  data.region_to_price = {}
-  data.region_node_count = {}
-  data.last_region = 0
-  return data_with_schema
-end
+}
 
 local function upgrade_schema(data_with_schema)
-  if data_with_schema.schema == '17' then
-    data_with_schema = upgrade_schema_from_17(data_with_schema)
-  end
-  if data_with_schema.schema == '18' then
-    data_with_schema = upgrade_schema_from_18(data_with_schema)
+  while schema_upgraders[data_with_schema.schema] do
+    data_with_schema = schema_upgraders[data_with_schema.schema](data_with_schema)
   end
   if data_with_schema.schema == current_schema then
     return data_with_schema.data
+  else
+    return default_data
   end
-  data_with_schema.schema = current_schema
-  data_with_schema.data = default_data
-  return data_with_schema
 end
 
 -- TODO I think it should be fine to only save_storage at intervals and on server exit
@@ -173,7 +195,9 @@ function harberger_economy.get_storage()
     else
       -- TODO deserialization takes about 5ms on a small world which is too slow to run every tick
       local data_with_schema = minetest.deserialize(data_string)
-      cached_storage = upgrade_schema(data_with_schema)
+      if data_with_schema then
+        cached_storage = upgrade_schema(data_with_schema)
+      end
       if not data_with_schema or data_with_schema.schema ~= current_schema then
         cached_storage = default_data
       else
@@ -242,6 +266,7 @@ function harberger_economy.initialize_player(player)
         storage.transactions[player_name] = {}
         storage.inventory_change_list[player_name] = {}
         storage.claim_on_place[player_name] = false
+        storage.chests[player_name] = {}
       end
   end)
 end
@@ -383,6 +408,8 @@ function harberger_economy.reason_to_string(reason)
         return 'Bankruptcy'
       elseif reason.type == 'buy_region' then
         return 'Bought ' .. reason.region
+      elseif reason.type == 'buy_chest' then
+        return 'Bought chest ' .. minetest.pos_to_string(reason.pos)
       end
   end
   harberger_economy.log('warn', 'Reason for payment' .. dump(reason) .. ' is unknown.')
@@ -481,9 +508,9 @@ function harberger_economy.get_offers(buying_player_name)
         end
       end
       -- Player chest offers
-      for i, pos in ipairs(harberger_economy.get_owned_pos()) do
+      for i, pos in ipairs(harberger_economy.get_owned_chest_pos()) do
         local location = {type='node', pos=pos}
-        local player_name =  harberger_economy.get_owner_of_pos(pos)
+        local player_name =  harberger_economy.get_chest_owner(pos)
         local inv = minetest.get_inventory(location)
         if inv and player_name ~= buying_player_name then
           for list_name, list in pairs(inv:get_lists()) do
@@ -552,6 +579,15 @@ function harberger_economy.reposses_assets(player_name)
   -- for i, region in ipairs(owned_regions) do
   --   harberger_economy.delete_region(region)
   -- end
+  local owned_pos = harberger_economy.get_chests(player_name)
+  for i, pos in ipairs(owned_pos) do
+    harberger_economy.disown_chest(pos, nil)
+    minetest.remove_node(pos)
+  end
+  local owned_regions = harberger_economy.get_owned_regions(player_name)
+  for i, region in ipairs(owned_regions) do
+    harberger_economy.delete_region(region)
+  end
 end
 
 local function on_successful_buy(item_name)
@@ -789,10 +825,14 @@ function harberger_economy.get_basket_price()
   )
 end
 
+local function get_3d_pos(t, pos)
+  return (((t[pos.x] or {})[pos.y]) or {})[pos.z]
+end
+
 function harberger_economy.get_region(pos)
   return harberger_economy.with_storage(
     function (storage)
-      return (((storage.pos_to_region[pos.x] or {})[pos.y]) or {})[pos.z]
+      return get_3d_pos(storage.pos_to_region, pos)
     end
   )
 end
@@ -821,16 +861,20 @@ function harberger_economy.is_not_owner(player_name, pos)
   return false
 end
 
+local function set_3d_pos(t, pos, value)
+    if not t[pos.x] then
+        t[pos.x] = {}
+      end
+      if not t[pos.x][pos.y] then
+        t[pos.x][pos.y] = {}
+      end
+      t[pos.x][pos.y][pos.z] = value
+end
+
 function harberger_economy.set_region(pos, region)
   return harberger_economy.with_storage(
     function (storage)
-      if not storage.pos_to_region[pos.x] then
-        storage.pos_to_region[pos.x] = {}
-      end
-      if not storage.pos_to_region[pos.x][pos.y] then
-        storage.pos_to_region[pos.x][pos.y] = {}
-      end
-      storage.pos_to_region[pos.x][pos.y][pos.z] = region
+      set_3d_pos(storage.pos_to_region, pos, region)
     end
   )
 end
@@ -1034,6 +1078,90 @@ function harberger_economy.buy_region(player_name, region)
         harberger_economy.set_region_owner(region, player_name)
         return true
       end
+    end
+  )
+end
+
+function harberger_economy.set_prospective_owner(player_name, pos)
+  local meta = minetest.get_meta(pos)
+  meta:set_string("harberger_economy:prospective_owner", player_name)
+end
+
+function harberger_economy.remove_prospective_owner(pos)
+  local meta = minetest.get_meta(pos)
+  meta:set_string("harberger_economy:prospective_owner", "")
+end
+
+
+function harberger_economy.get_prospective_owner(pos)
+  local meta = minetest.get_meta(pos)
+  return meta:get("harberger_economy:prospective_owner")
+end
+
+function harberger_economy.set_chest_owner(player_name, pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      table.insert(storage.chests[player_name], pos)
+      set_3d_pos(storage.pos_to_chest_owner, pos, player_name)
+    end
+  )
+end
+
+function harberger_economy.get_chest_owner(pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      return get_3d_pos(storage.pos_to_chest_owner, pos)
+    end
+  )
+end
+
+function harberger_economy.is_chest_ownable(pos)
+  local inv = minetest.get_inventory({type="node", pos=pos})
+  if not inv then
+    return false
+  end
+  for list_name, list in pairs(inv:get_lists()) do
+    harberger_economy.log('warning', minetest.pos_to_string(pos) .. ' ' .. list_name)
+    if not inv:is_empty(list_name) then
+      return true
+    end
+  end
+  return false
+end
+
+function harberger_economy.get_owned_chest_pos()
+    return harberger_economy.with_storage(
+    function (storage)
+      local list = {}
+      for x, a in pairs(storage.pos_to_chest_owner) do
+        for y, b in pairs(a) do
+          for z, owner in pairs(b) do
+            if owner then
+              table.insert(list, {x=x, y=y, z=z})
+            end
+          end
+        end
+      end
+      return list
+    end
+  )
+end
+
+function harberger_economy.get_chests(player_name)
+  return harberger_economy.with_storage(
+    function (storage)
+      return storage.chests[player_name] or {}
+    end
+  )
+end
+
+function harberger_economy.disown_chest(pos)
+  return harberger_economy.with_storage(
+    function (storage)
+      local owner = harberger_economy.get_chest_owner(pos)
+      if owner then
+      end
+      storage.chests[owner] = nil
     end
   )
 end
@@ -1627,8 +1755,8 @@ local function update_player_hud(player)
   if pointed then
     local under = pointed.under
     if under then
-      local owner = harberger_economy.get_owner_of_pos(under)
-      local region = harberger_economy.get_region(under)
+      local owner = harberger_economy.get_chest_owner(under)
+      -- local region = harberger_economy.get_region(under)
       local color = 0x00FF00
       if owner ~= player_name then
         color = 0xFF0000
@@ -1643,7 +1771,7 @@ local function update_player_hud(player)
               alignment = {x = -1, y = 1},
               offset = {x=-12, y = 24},
               number = color,
-              text = "Block in region " .. region .. " owned by " .. owner
+              text = "Chest owned by" .. owner --"Block in region " .. region .. " owned by " .. owner
             }
         ))
       end
@@ -1828,6 +1956,38 @@ local function do_bankruptcy()
   end
 end
 
+-- TODO make this configurable option
+-- Seems like you can open a chest from 5 away, so 8 seems reasoable
+local chest_scan_radius = 8
+
+local function scan_area_for_owned(pos)
+  local r =chest_scan_radius
+  for x=pos.x-r,pos.x+r do
+    for y = pos.y-r,pos.y+r do
+      for z = pos.z-r,pos.z+r do
+        local p = {x=x, y=y, z=z}
+        local powner = harberger_economy.get_prospective_owner(p)
+        local cowner = harberger_economy.get_chest_owner(p)
+        local ownable = harberger_economy.is_chest_ownable(p)
+        if not cowner and powner and ownable then
+          harberger_economy.set_chest_owner(powner, p)
+        end
+      end
+    end
+  end
+end
+
+local function update_owned_chests()
+  harberger_economy.with_storage(
+    function (storage)
+      for i, player in ipairs(minetest.get_connected_players()) do
+        scan_area_for_owned(player:get_pos())
+      end
+    end
+  )
+end
+
+
 local function update_owned_nodes()
   harberger_economy.with_storage(
     function (storage)
@@ -1850,7 +2010,8 @@ local function update_function(dtime)
       for i, player in ipairs(connected_players) do
         update_player(player)
       end
-      update_owned_nodes()
+      update_owned_chests()
+      -- update_owned_nodes()
       -- Check if we should do payment
       storage.time_since_last_payment = storage.time_since_last_payment + dtime
 
@@ -2081,11 +2242,12 @@ end
 minetest.register_on_placenode(
   function (pos, newnode, placer, oldnode, itemstack, pointed_thing)
     if placer:is_player() then
-      -- local player_name = placer:get_player_name()
+      local player_name = placer:get_player_name()
       -- if harberger_economy.get_claim_on_place(player_name) then
       --   harberger_economy.disown_node(pos, oldnode)
       --   harberger_economy.claim_node(player_name, pos, newnode)
       -- end
+      harberger_economy.set_prospective_owner(player_name, pos)
       hide_formspec(pos)
     end
   end
@@ -2093,7 +2255,7 @@ minetest.register_on_placenode(
 
 minetest.register_on_dignode(
   function (pos, oldnode, digger)
-    -- harberger_economy.disown_node(pos, oldnode)
+    harberger_economy.disown_chest(pos)
   end
 )
 
@@ -2111,36 +2273,54 @@ end
 
 minetest.register_on_protection_violation(
   function(pos, player_name)
+    -- if harberger_economy.is_protected(pos, player_name) then
+    --   local inform_players = {player_name}
+    --   local owner = harberger_economy.get_owner_of_pos(pos)
+    --   local region = harberger_economy.get_region(pos)
+    --   local pos_string = minetest.pos_to_string(pos)
+    --   table.insert(inform_players, owner)
+    --   local message =
+    --     player_name
+    --     .. " tried to interact with node " .. pos_string
+    --     .. " in region " .. region
+    --     .. " owned by " .. owner
+    --   harberger_economy.log_chat("warning", message, inform_players)
+    --   harberger_economy.show_buy_region_form(player_name, pos)
+    -- end
     if harberger_economy.is_protected(pos, player_name) then
       local inform_players = {player_name}
-      local owner = harberger_economy.get_owner_of_pos(pos)
-      local region = harberger_economy.get_region(pos)
+      local owner = harberger_economy.get_chest_owner(pos)
       local pos_string = minetest.pos_to_string(pos)
       table.insert(inform_players, owner)
       local message =
         player_name
-        .. " tried to interact with node " .. pos_string
-        .. " in region " .. region
+        .. " tried to interact with Chest " .. pos_string
         .. " owned by " .. owner
       harberger_economy.log_chat("warning", message, inform_players)
-      harberger_economy.show_buy_region_form(player_name, pos)
+      harberger_economy.show_buy_chest_form(player_name, pos)
     end
   end
 )
 
+local function on_near_place(player_name, pos)
+  if not harberger_economy.get_chest_owner(pos) then
+    harberger_economy.set_prospective_owner(player_name, pos)
+  end
+  -- if harberger_economy.is_not_owner(player_name, pt) then
+  --   minetest.record_protection_violation(pt, player_name)
+  --   return false, itemstack, false
+  -- end
+end
+
 function  harberger_economy.item_place_hook(itemstack, placer, pointed_thing)
   if placer and placer:get_player_name() then
     local player_name = placer:get_player_name()
-    if pointed_thing and pointed_thing.above then
-      if harberger_economy.is_not_owner(player_name, pointed_thing.above) then
-        minetest.record_protection_violation(pointed_thing.above, player_name)
-        return false, itemstack, false
+    if pointed_thing then
+      if pointed_thing.above then
+        on_near_place(player_name, pointed_thing.above)
       end
-    end
-    if pointed_thing and pointed_thing.under then
-      if harberger_economy.is_not_owner(player_name, pointed_thing.under) then
-        minetest.record_protection_violation(pointed_thing.under, player_name)
-        return false, itemstack, false
+      if pointed_thing.under then
+        on_near_place(player_name, pointed_thing.under)
       end
     end
   end
