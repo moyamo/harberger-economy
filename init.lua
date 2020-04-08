@@ -185,7 +185,8 @@ function harberger_economy.set_storage(data)
     -- local last_thing = minetest.get_us_time()
     harberger_economy.storage:set_string('data', data_string)
     -- local last = minetest.get_us_time()
-    -- print("Saving took " .. (last - start) .. "us." .. " Serializing took " .. (last_thing - thing) .. "us. String size " .. #data_string)
+    -- print("Saving took " .. (last - start) .. "us."
+    -- .. "Serializing took " .. (last_thing - thing) .. "us. String size " .. #data_string)
   end
 end
 
@@ -1379,7 +1380,8 @@ function harberger_economy.show_region_price_form(player_name)
     table.insert_all(
       form_spec,
       {
-        'field[', 0.2 + c, ',', r, ';3,2;', 'region_price:', line.region, ';Region ', line.region, ' Price;', line.price, ']',
+        'field[', 0.2 + c, ',', r, ';3,2;', 'region_price:', line.region,
+          ';Region ', line.region, ' Price;', line.price, ']',
         'button[', c + 3, ',', r + 0.15, ';2,1;', 'update:', line.region, ';Update]',
         'label[', c + 5, ',', r + 0.35, ';Tax rate: ', line.tax_rate, ']',
         'label[', c + 7, ',', r + 0.35, ';Tax total: ', line.total_tax, ']',
