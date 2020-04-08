@@ -123,7 +123,7 @@ local default_data = {
   },
 }
 
-local current_schema = '18'
+local current_schema = '19'
 local cached_storage = nil
 local batch_storage = 0
 
@@ -137,9 +137,23 @@ local function upgrade_schema_from_17(data_with_schema)
   return data_with_schema
 end
 
+local function upgrade_schema_from_18(data_with_schema)
+  -- Delete region data because by default it is weird
+  data_with_schema.schema = '19'
+  local data = data_with_schema.data
+  data.region_to_owner = {}
+  data.region_to_price = {}
+  data.region_node_count = {}
+  data.last_region = 0
+  return data_with_schema
+end
+
 local function upgrade_schema(data_with_schema)
   if data_with_schema.schema == '17' then
     data_with_schema = upgrade_schema_from_17(data_with_schema)
+  end
+  if data_with_schema.schema == '18' then
+    data_with_schema = upgrade_schema_from_18(data_with_schema)
   end
   if data_with_schema.schema == current_schema then
     return data_with_schema.data
@@ -529,15 +543,15 @@ function harberger_economy.reposses_assets(player_name)
       persistent_inventory_try_to_remove_one(player_name, item:to_string())
     end
   end
-  local owned_pos = harberger_economy.get_owned_pos(player_name)
-  for i, pos in ipairs(owned_pos) do
-    harberger_economy.set_region(pos, nil)
-    minetest.remove_node(pos)
-  end
-  local owned_regions = harberger_economy.get_owned_regions(player_name)
-  for i, region in ipairs(owned_regions) do
-    harberger_economy.delete_region(region)
-  end
+  -- local owned_pos = harberger_economy.get_owned_pos(player_name)
+  -- for i, pos in ipairs(owned_pos) do
+  --   harberger_economy.set_region(pos, nil)
+  --   minetest.remove_node(pos)
+  -- end
+  -- local owned_regions = harberger_economy.get_owned_regions(player_name)
+  -- for i, region in ipairs(owned_regions) do
+  --   harberger_economy.delete_region(region)
+  -- end
 end
 
 local function on_successful_buy(item_name)
@@ -736,10 +750,10 @@ function harberger_economy.get_tax_owed(player_name)
   for item_name, tax_entry in pairs(tax_per_item) do
     tax = tax + tax_entry.total_tax
   end
-  local tax_per_region = harberger_economy.get_tax_per_region(player_name)
-  for region, tax_entry in pairs(tax_per_region) do
-    tax = tax + tax_entry.total_tax
-  end
+  -- local tax_per_region = harberger_economy.get_tax_per_region(player_name)
+  -- for region, tax_entry in pairs(tax_per_region) do
+  --   tax = tax + tax_entry.total_tax
+  -- end
   return tax
 end
 
@@ -749,9 +763,9 @@ function harberger_economy.get_wealth(player_name)
   for item_name, tax_entry in pairs(tax_per_item) do
     wealth = wealth + tax_entry.average_price * tax_entry.count
   end
-  for i, region in pairs(harberger_economy.get_owned_regions(player_name)) do
-    wealth = wealth + harberger_economy.get_region_price(region)
-  end
+  -- for i, region in pairs(harberger_economy.get_owned_regions(player_name)) do
+  --   wealth = wealth + harberger_economy.get_region_price(region)
+  -- end
   return wealth
 end
 
@@ -1392,28 +1406,28 @@ function harberger_economy.show_region_price_form(player_name)
   minetest.show_formspec(player_name, form_name, form_spec)
 end
 
--- Receive price form
-minetest.register_on_player_receive_fields(
-  function(player, form_name, fields)
-    if form_name ~= 'harberger_economy:region_price_form' then
-      return false
-    end
-    local player_name = player:get_player_name()
-    local prefix = "update:"
-    for k,v in pairs(fields) do
-      if k:sub(1, #prefix) == prefix then
-        local region = tonumber(k:sub(#prefix + 1, #k))
-        if harberger_economy.is_region(region) then
-          local price = tonumber(fields['region_price:' .. region])
-          if price and price >= 0 then
-            harberger_economy.set_region_price(region, price)
-            harberger_economy.show_region_price_form(player_name)
-          end
-        end
-      end
-    end
-  end
-)
+-- -- Receive price form
+-- minetest.register_on_player_receive_fields(
+--   function(player, form_name, fields)
+--     if form_name ~= 'harberger_economy:region_price_form' then
+--       return false
+--     end
+--     local player_name = player:get_player_name()
+--     local prefix = "update:"
+--     for k,v in pairs(fields) do
+--       if k:sub(1, #prefix) == prefix then
+--         local region = tonumber(k:sub(#prefix + 1, #k))
+--         if harberger_economy.is_region(region) then
+--           local price = tonumber(fields['region_price:' .. region])
+--           if price and price >= 0 then
+--             harberger_economy.set_region_price(region, price)
+--             harberger_economy.show_region_price_form(player_name)
+--           end
+--         end
+--       end
+--     end
+--   end
+-- )
 
 function harberger_economy.show_buy_region_form(player_name, pos)
   local form_name = 'harberger_economy:buy_region_form'
@@ -1788,11 +1802,11 @@ local function do_auction()
         local new_price = harberger_economy.round(offer.price * rate)
         harberger_economy.set_reserve_price(player_name, item_name, new_price)
       end
-      for j, region in ipairs(harberger_economy.get_owned_regions(player_name)) do
-        local old_price = harberger_economy.get_region_price(region)
-        local new_price = harberger_economy.round(old_price * rate)
-        harberger_economy.set_region_price(region, new_price)
-      end
+      -- for j, region in ipairs(harberger_economy.get_owned_regions(player_name)) do
+      --   local old_price = harberger_economy.get_region_price(region)
+      --   local new_price = harberger_economy.round(old_price * rate)
+      --   harberger_economy.set_region_price(region, new_price)
+      -- end
     end
   end
 end
@@ -1959,27 +1973,27 @@ minetest.register_chatcommand(
   }
 )
 
-minetest.register_chatcommand(
-  'harberger_economy:region_price',
-  {
-    params = '[region] [price]',
-    description = 'Price regions',
-    privs = {},
-    func = function (player_name, params)
-      params = string.split(params, ' ')
-      local region = params[1]
-      if harberger_economy.is_region(region) then
-        region = nil
-      end
-      local price = tonumber(params[2])
-      if price and region then
-        harberger_economy.set_region_price(region, price)
-      else
-        harberger_economy.show_region_price_form(player_name)
-      end
-    end
-  }
-)
+-- minetest.register_chatcommand(
+--   'harberger_economy:region_price',
+--   {
+--     params = '[region] [price]',
+--     description = 'Price regions',
+--     privs = {},
+--     func = function (player_name, params)
+--       params = string.split(params, ' ')
+--       local region = params[1]
+--       if harberger_economy.is_region(region) then
+--         region = nil
+--       end
+--       local price = tonumber(params[2])
+--       if price and region then
+--         harberger_economy.set_region_price(region, price)
+--       else
+--         harberger_economy.show_region_price_form(player_name)
+--       end
+--     end
+--   }
+-- )
 
 
 -- minetest.register_chatcommand(
@@ -2031,7 +2045,7 @@ if sfinv then
         context,
         "button[0.1,0.1;2,1;buy;Buy]"
           .. "button[0.1,1.1;2,1;price;Price]"
-          .. "button[2.1,1.1;2,1;region_price;Region Price]"
+          -- .. "button[2.1,1.1;2,1;region_price;Region Price]"
           .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
           .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
           .. "button[4.1,2.1;2,1;item_quantity;Item Quantity]"
@@ -2047,8 +2061,8 @@ if sfinv then
         harberger_economy.show_buy_form(player_name)
       elseif fields.price then
         harberger_economy.show_price_form(player_name)
-      elseif fields.region_price then
-        harberger_economy.show_region_price_form(player_name)
+      -- elseif fields.region_price then
+      --   harberger_economy.show_region_price_form(player_name)
       elseif fields.tax_amount then
         harberger_economy.show_tax_form(player_name, 'amount')
       elseif fields.tax_rate then
@@ -2067,7 +2081,7 @@ end
 minetest.register_on_placenode(
   function (pos, newnode, placer, oldnode, itemstack, pointed_thing)
     if placer:is_player() then
-      local player_name = placer:get_player_name()
+      -- local player_name = placer:get_player_name()
       -- if harberger_economy.get_claim_on_place(player_name) then
       --   harberger_economy.disown_node(pos, oldnode)
       --   harberger_economy.claim_node(player_name, pos, newnode)
@@ -2079,7 +2093,7 @@ minetest.register_on_placenode(
 
 minetest.register_on_dignode(
   function (pos, oldnode, digger)
-    harberger_economy.disown_node(pos, oldnode)
+    -- harberger_economy.disown_node(pos, oldnode)
   end
 )
 
