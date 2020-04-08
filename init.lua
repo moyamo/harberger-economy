@@ -1982,25 +1982,25 @@ minetest.register_chatcommand(
 )
 
 
-minetest.register_chatcommand(
-  'harberger_economy:claim_on_place',
-  {
-    params = '(true|false)',
-    description = 'Price items',
-    privs = {},
-    func = function (player_name, params)
-      if params == 'true' then
-        harberger_economy.set_claim_on_place(player_name, true)
-        return true, "You will own all the future nodes you place"
-      elseif params == 'false' then
-        harberger_economy.set_claim_on_place(player_name, false)
-        return true, "You will NOT own all the future nodes you place"
-      else
-        return false, "Please specify 'true' or 'false' as an argument"
-      end
-    end
-  }
-)
+-- minetest.register_chatcommand(
+--   'harberger_economy:claim_on_place',
+--   {
+--     params = '(true|false)',
+--     description = 'Price items',
+--     privs = {},
+--     func = function (player_name, params)
+--       if params == 'true' then
+--         harberger_economy.set_claim_on_place(player_name, true)
+--         return true, "You will own all the future nodes you place"
+--       elseif params == 'false' then
+--         harberger_economy.set_claim_on_place(player_name, false)
+--         return true, "You will NOT own all the future nodes you place"
+--       else
+--         return false, "Please specify 'true' or 'false' as an argument"
+--       end
+--     end
+--   }
+-- )
 
 
 local update_timediff = harberger_economy.config.update_delay
@@ -2025,7 +2025,7 @@ if sfinv then
   sfinv.register_page("harberger_economy:inventory", {
     title = "Economy",
     get = function(self, player, context)
-      local claim_on_place = tostring(harberger_economy.get_claim_on_place(player:get_player_name()))
+      -- local claim_on_place = tostring(harberger_economy.get_claim_on_place(player:get_player_name()))
       return sfinv.make_formspec(
         player,
         context,
@@ -2035,7 +2035,7 @@ if sfinv then
           .. "button[0.1,2.1;2,1;tax_amount;Tax Amount]"
           .. "button[2.1,2.1;2,1;tax_rate;Tax Rate]"
           .. "button[4.1,2.1;2,1;item_quantity;Item Quantity]"
-          .. "checkbox[0.1,3.1;claim_on_place;Claim on place;" .. claim_on_place .. "]"
+   --       .. "checkbox[0.1,3.1;claim_on_place;Claim on place;" .. claim_on_place .. "]"
         ,
         false
       )
@@ -2055,10 +2055,10 @@ if sfinv then
         harberger_economy.show_tax_form(player_name, 'rate')
       elseif fields.item_quantity then
         harberger_economy.show_tax_form(player_name, 'quantity')
-      elseif fields.claim_on_place then
-        harberger_economy.set_claim_on_place(player_name, fields.claim_on_place == 'true')
-        -- Update the formspec so that when we reopen it the correct default value is shown
-        sfinv.set_page(player, "harberger_economy:inventory")
+      -- elseif fields.claim_on_place then
+      --   harberger_economy.set_claim_on_place(player_name, fields.claim_on_place == 'true')
+      --   -- Update the formspec so that when we reopen it the correct default value is shown
+      --   sfinv.set_page(player, "harberger_economy:inventory")
       end
     end,
   })
@@ -2068,10 +2068,10 @@ minetest.register_on_placenode(
   function (pos, newnode, placer, oldnode, itemstack, pointed_thing)
     if placer:is_player() then
       local player_name = placer:get_player_name()
-      if harberger_economy.get_claim_on_place(player_name) then
-        harberger_economy.disown_node(pos, oldnode)
-        harberger_economy.claim_node(player_name, pos, newnode)
-      end
+      -- if harberger_economy.get_claim_on_place(player_name) then
+      --   harberger_economy.disown_node(pos, oldnode)
+      --   harberger_economy.claim_node(player_name, pos, newnode)
+      -- end
       hide_formspec(pos)
     end
   end
