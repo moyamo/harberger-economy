@@ -123,9 +123,32 @@ local default_data = {
   },
 }
 
-local current_schema = '17'
+local current_schema = '18'
 local cached_storage = nil
 local batch_storage = 0
+
+
+local function upgrade_schema_from_17(data_with_schema)
+  -- Disable claim on place by default, because it is weird
+  data_with_schema.schema = '18'
+  for p, b in pairs(data_with_schema.data.claim_on_place) do
+    data_with_schema.data.claim_on_place[p] = false
+  end
+  return data_with_schema
+end
+
+local function upgrade_schema(data_with_schema)
+  if data_with_schema.schema == '17' then
+    data_with_schema = upgrade_schema_from_17(data_with_schema)
+  end
+  if data_with_schema.schema == current_schema then
+    return data_with_schema.data
+  end
+  data_with_schema.schema = current_schema
+  data_with_schema.data = default_data
+  return data_with_schema
+end
+
 -- TODO I think it should be fine to only save_storage at intervals and on server exit
 -- and only get storage at start. Otherwise we can manipulated cached_storage directly
 function harberger_economy.get_storage()
@@ -136,6 +159,7 @@ function harberger_economy.get_storage()
     else
       -- TODO deserialization takes about 5ms on a small world which is too slow to run every tick
       local data_with_schema = minetest.deserialize(data_string)
+      cached_storage = upgrade_schema(data_with_schema)
       if not data_with_schema or data_with_schema.schema ~= current_schema then
         cached_storage = default_data
       else
@@ -202,7 +226,7 @@ function harberger_economy.initialize_player(player)
         storage.balances[player_name] = 0
         storage.transactions[player_name] = {}
         storage.inventory_change_list[player_name] = {}
-        storage.claim_on_place[player_name] = true
+        storage.claim_on_place[player_name] = false
       end
   end)
 end
