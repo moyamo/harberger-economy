@@ -33,3 +33,17 @@ Unfreeze account and restore prices as soon as person reaches a positive balance
 Make sure everything is in a namespace (even small utility functions)
 
 * Integrate central message and use that instead of the chat to send player messages
+
+Problems after first play through
+
+* Automatic pricing is pretty bad in the late game
+
+* Regions being on by default causes too many regions to exist
+  * regions should be off, but there should be a different system for chest likes.
+  * set 0 to delete region
+  * It's difficult to bulk chnage prices
+  * If things which should be in high demand are initially made expensive, no one can buy them to increase demand
+  * It's difficult to find items
+  * It's hard to know how much tax or income yuo are going to get
+  * I don't think being rational is intuitive, I need a (i have too little money) and an (i have too much taxes button)
+  * Regions need to be more explicit, when you create a region it should ask for a name (and you can choose existing regions)
