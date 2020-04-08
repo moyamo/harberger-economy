@@ -951,9 +951,13 @@ end
 function harberger_economy.set_region_price(region, price)
   return harberger_economy.with_storage(
     function (storage)
-      local new_price = price
-      new_price = math.max(0, new_price)
-      storage.region_to_price[region] = new_price
+      local new_price = math.max(0, price)
+      if new_price == 0 then
+        harberger_economy.delete_region(region)
+      else
+        storage.region_to_price[region] = new_price
+      end
+
     end
   )
 end
@@ -1374,7 +1378,7 @@ minetest.register_on_player_receive_fields(
         local region = tonumber(k:sub(#prefix + 1, #k))
         if harberger_economy.is_region(region) then
           local price = tonumber(fields['region_price:' .. region])
-          if price and price > 0 then
+          if price and price >= 0 then
             harberger_economy.set_region_price(region, price)
             harberger_economy.show_region_price_form(player_name)
           end
