@@ -446,10 +446,7 @@ function harberger_economy.get_default_price(item_name)
       local time_is_money = price_index * time * time_speed / DAY_SECONDS
       local price = time_is_money
       if time_is_money > price_index then
-        local most_expensive = harberger_economy.get_most_expensive_offer()
-        if most_expensive and most_expensive.price > 0 then
-          price = math.min(price, most_expensive.price * 2)
-        end
+        price = math.min(price, price_index)
       end
       return harberger_economy.round(price)
   end
