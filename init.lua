@@ -123,9 +123,10 @@ local default_data = {
   },
   pos_to_chest_owner = {
   },
+  velocity_of_money = {},
 }
 
-local current_schema = '23'
+local current_schema = '24'
 local cached_storage = nil
 local batch_storage = 0
 
@@ -174,6 +175,17 @@ local schema_upgraders = {
     data_with_schema.schema = '23'
     local data = data_with_schema.data
     data.chests = nil
+    return data_with_schema
+  end,
+  ['23'] = function (data_with_schema)
+    -- Reset balances because there is too much hyper-inflation
+    data_with_schema.schema = '24'
+    local data = data_with_schema.data
+    for player_name, balance in pairs(data.balances) do
+      data.balances[player_name] = 0
+    end
+    -- Add velocity of money
+    data.velocity_of_money = {}
     return data_with_schema
   end
 }
@@ -302,6 +314,23 @@ end
 function harberger_economy.get_reserve_offer(player_name, item_name)
   return harberger_economy.with_storage(function (storage)
       return storage.reserve_offers[player_name][item_name]
+  end)
+end
+
+function harberger_economy.get_velocity_of_money()
+  return harberger_economy.with_storage(function (storage)
+      if #storage.velocity_of_money > 0 then
+        return storage.velocity_of_money[#storage.velocity_of_money]
+      else
+        return nil
+      end
+  end)
+end
+
+
+function harberger_economy.set_velocity_of_money(v)
+  return harberger_economy.with_storage(function (storage)
+      table.insert(storage.velocity_of_money, v)
   end)
 end
 
@@ -802,6 +831,25 @@ function harberger_economy.get_tax_per_item(player_name)
       return tax
     end
   )
+end
+
+-- O(I)
+function harberger_economy.get_nominal_gdp(offers)
+  local nominal_gdp = 0
+  for item_name, offer_list in pairs(offers) do
+    for i, offer in ipairs(offer_list) do
+      nominal_gdp = nominal_gdp + offer.count * offer.price
+    end
+  end
+  for j, player_name in ipairs(harberger_economy.get_players()) do
+    for i, pos in ipairs(harberger_economy.get_owned_chest_pos(player_name)) do
+      local node = minetest.get_node(pos)
+      if node and node.name and harberger_economy.get_reserve_offer(player_name, node.name) then
+        nominal_gdp = nominal_gdp + harberger_economy.get_reserve_offer(player_name, node.name)
+      end
+    end
+  end
+  return nominal_gdp
 end
 
 function harberger_economy.get_tax_per_region(player_name)
@@ -1917,6 +1965,7 @@ local function do_inflation_targeting(charges)
   local target_price = harberger_economy.config.price_index
   local target_supply = current_supply * target_price / basket_price
   -- Prevent rapid hyper-inflation
+  local strategy = "Simple Ratio"
   local days_diff = harberger_economy.get_time_since_last_payement()
     / DAY_SECONDS * TIME_SPEED
   local max_ratio = math.pow(
@@ -1932,8 +1981,23 @@ local function do_inflation_targeting(charges)
   local players = harberger_economy.get_players()
   local per_player_payout = total_payout / #players
   local basic_income = calculate_basic_income()
+  if max_ratio <= target_supply / current_supply then
+    strategy = "Max Ratio"
+  end
+  -- If there is deflation but no one is spending money then increasing money
+  -- supply won't help, so fallback to basic income
+  local old_velocity = harberger_economy.get_velocity_of_money()
+  local ngdp = harberger_economy.get_nominal_gdp(harberger_economy.get_offers())
+  local new_velocity = ngdp / current_supply
+  harberger_economy.log("warning", old_velocity .. " " .. new_velocity)
+  harberger_economy.set_velocity_of_money(new_velocity)
+  if old_velocity and old_velocity > new_velocity and target_supply > current_supply then
+    strategy = "Low Liquidity"
+    per_player_payout = basic_income
+  end
   -- If we are dealing with small amounts of money we can ignore the max_ratio_limit
   if per_player_payout < basic_income and max_ratio <= target_supply / current_supply then
+    strategy = "Small Max Ratio"
     per_player_payout = basic_income
   end
   harberger_economy.log(
@@ -1945,6 +2009,7 @@ local function do_inflation_targeting(charges)
       .. ' by giving a payout of ' .. per_player_payout
       .. ' * ' .. #players
       ..' = ' .. (#players * per_player_payout)
+      .. 'using strategy ' .. strategy
   )
   for i, player in ipairs(players) do
     harberger_economy.pay(nil, player, per_player_payout, {type='daily_income'}, true)
