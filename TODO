@@ -50,3 +50,14 @@ Problems after first play through
   * Regions need scroll bar
   * It's annoying when people buy stuff you keep, set reserve stuff
   * Auto reserve furnace
+
+Priority Fixes
+  * DONE turn regions off
+  * Bulk change prices
+  * search for items
+  * Force manual setting of prices with a tutorial
+  * Show tax and income in top right corner
+  * display interval rather than daily values (maybe...)
+  * Allow reserve prices,
+  * Auto reserve furnace items
+  * allow a want to buy, but too expensive so that taxes will adjust
