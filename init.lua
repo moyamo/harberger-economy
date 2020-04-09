@@ -370,6 +370,33 @@ function harberger_economy.set_reserve_price(player_name, item_name, price)
   end)
 end
 
+function harberger_economy.multiply_reserve_prices(player_name, multiple)
+  return harberger_economy.with_storage(function (storage)
+      multiple = tonumber(multiple)
+      if not multiple or multiple <= 0 then
+        -- While in theory negative valuations should be possible (I would pay
+        -- for you to take this off my hands), but it becomes messy when the person
+        -- can't actually afford to pay. So we disallow it.
+        harberger_economy.log(
+          'warning',
+          "Tried to multiply prices by non-positive number. Ignoring"
+        )
+        return
+      end
+      local offers = storage.reserve_offers[player_name]
+      if not offers then
+        harberger_economy.log(
+          'warning',
+          "Could not find player " .. player_name .. "cannot increase prices"
+        )
+        return
+      end
+      for item_name, value in pairs(offers) do
+        value.price = harberger_economy.round(value.price * multiple)
+      end
+  end)
+end
+
 function harberger_economy.get_default_price(item_name)
   --[[
     When a player gets a new item if there is no reserve price
@@ -1376,11 +1403,9 @@ local function get_item_button_pressed(fields)
   return nil
 end
 
-local function get_best_dimensions(num_items, max_rows)
-  local min_columns = 8
-  if max_rows == nil then
-    max_rows = 12 -- From trail and error this seems reasonable
-  end
+local function get_best_dimensions(num_items, max_rows, min_columns)
+  min_columns = min_columns or 8
+  max_rows = max_rows or 12 -- From trail and error this seems reasonable
   if num_items <= max_rows * min_columns then
     local rows = math.ceil(num_items / min_columns)
     return rows, min_columns
@@ -1476,7 +1501,7 @@ function harberger_economy.show_price_form(player_name, item_name)
     table.insert(offer_list, {item=item, label=offer.price})
   end
   table.sort(offer_list, function (a, b) return a.item < b.item end)
-  local rows, columns = get_best_dimensions(#offer_list, 11)
+  local rows, columns = get_best_dimensions(#offer_list, 11, 10)
   local form_spec = {'size[', columns, ',', rows + 1, ']'}
   table.insert(form_spec, 'field[0.3,0;3,2;item_name;Item name;')
   table.insert(form_spec, item_name)
@@ -1485,6 +1510,8 @@ function harberger_economy.show_price_form(player_name, item_name)
   table.insert(form_spec, price)
   table.insert(form_spec, ']')
   table.insert(form_spec, 'button[6,0;2,1.3;update;Update]')
+  table.insert(form_spec, 'button[8,0;1,1.3;inc10;+10%]')
+  table.insert(form_spec, 'button[9,0;1,1.3;dec10;-10%]')
   insert_item_table(0, 1, columns, rows, offer_list, form_spec)
   form_spec = table.concat(form_spec)
   minetest.show_formspec(player_name, form_name, form_spec)
@@ -1505,6 +1532,12 @@ minetest.register_on_player_receive_fields(
         harberger_economy.show_price_form(player_name, item_name)
       end
       return true
+    elseif fields.inc10 then
+      harberger_economy.multiply_reserve_prices(player_name, 1.1)
+      harberger_economy.show_price_form(player_name, item_name)
+    elseif fields.dec10 then
+      harberger_economy.multiply_reserve_prices(player_name, 0.9)
+      harberger_economy.show_price_form(player_name, item_name)
     end
     local new_item_name = get_item_button_pressed(fields)
     if new_item_name then
@@ -2109,6 +2142,25 @@ minetest.register_chatcommand(
         harberger_economy.set_reserve_price(player_name, item_name, price)
       else
         harberger_economy.show_price_form(player_name, item_name)
+      end
+    end
+  }
+)
+
+
+minetest.register_chatcommand(
+  'harberger_economy:multiply_prices',
+  {
+    params = '[multiple]',
+    description = 'Price items',
+    privs = {},
+    func = function (player_name, params)
+      local multiple = tonumber(params)
+      if multiple and multiple > 0 then
+        harberger_economy.multiply_reserve_prices(player_name, multiple)
+        return true
+      else
+        return false, "Invalid multiple"
       end
     end
   }
