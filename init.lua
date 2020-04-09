@@ -842,7 +842,7 @@ function harberger_economy.get_nominal_gdp(offers)
     for i, pos in ipairs(harberger_economy.get_owned_chest_pos(player_name)) do
       local node = minetest.get_node(pos)
       if node and node.name and harberger_economy.get_reserve_offer(player_name, node.name) then
-        nominal_gdp = nominal_gdp + harberger_economy.get_reserve_offer(player_name, node.name)
+        nominal_gdp = nominal_gdp + harberger_economy.get_reserve_offer(player_name, node.name).price
       end
     end
   end
@@ -1986,7 +1986,6 @@ local function do_inflation_targeting(charges)
   local old_velocity = harberger_economy.get_velocity_of_money()
   local ngdp = harberger_economy.get_nominal_gdp(harberger_economy.get_offers())
   local new_velocity = ngdp / current_supply
-  harberger_economy.log("warning", old_velocity .. " " .. new_velocity)
   harberger_economy.set_velocity_of_money(new_velocity)
   if old_velocity and old_velocity > new_velocity and target_supply > current_supply then
     strategy = "Low Liquidity"
